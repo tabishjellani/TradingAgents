@@ -5,12 +5,13 @@ Exposes REST and SSE endpoints for the TradingAgents PWA frontend.
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from backend.app.auth import UserClaims, get_current_user, require_admin
 from backend.app.config import settings
 
 _START_TIME = datetime.now(UTC)
@@ -77,6 +78,36 @@ async def system_info() -> dict[str, Any]:
             "quick": settings.default_quick_model,
             "deep": settings.default_deep_model,
         },
+    }
+
+
+@app.get("/api/v1/user/profile", tags=["User"])
+async def get_user_profile(
+    current_user: Annotated[UserClaims, Depends(get_current_user)],
+) -> dict[str, Any]:
+    """Retrieve verified profile of the authenticated user."""
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "role": current_user.role,
+        "daily_job_quota": settings.user_daily_job_quota,
+    }
+
+
+@app.get("/api/v1/admin/audit-logs", tags=["Admin"])
+async def get_admin_audit_logs(
+    admin: Annotated[UserClaims, Depends(require_admin)],
+) -> dict[str, Any]:
+    """Protected admin endpoint: returns security audit logs."""
+    return {
+        "admin_id": admin.id,
+        "events": [
+            {
+                "action": "SYSTEM_STARTUP",
+                "actor": "System",
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        ],
     }
 
 
