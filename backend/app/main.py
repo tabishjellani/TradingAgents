@@ -17,6 +17,7 @@ from backend.app.api.v1.backtest import router as backtest_router
 from backend.app.api.v1.market import router as market_router
 from backend.app.api.v1.portfolio import router as portfolio_router
 from backend.app.api.v1.research import router as research_router
+from backend.app.api.v1.trading import router as trading_router
 from backend.app.api.v1.watchlist import router as watchlist_router
 from backend.app.auth import UserClaims, get_current_user
 from backend.app.config import settings
@@ -54,6 +55,7 @@ app.include_router(backtest_router)
 app.include_router(market_router)
 app.include_router(portfolio_router)
 app.include_router(research_router)
+app.include_router(trading_router)
 app.include_router(watchlist_router)
 
 
