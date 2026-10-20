@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from backend.app.auth import UserClaims, get_current_user
+from backend.app.db.repository import db_repo
 from backend.app.engine.paper_trading import (
     PaperOrderRecord,
     PaperOrderRequest,
@@ -15,7 +16,7 @@ from tradingagents.dataflows.symbols import crypto_base, normalize_symbol, safe_
 
 router = APIRouter(prefix="/api/v1/portfolios", tags=["Portfolios"])
 
-# In-memory store for paper portfolios (synced to Supabase when configured)
+# In-memory runtime cache synchronized with db_repo
 _portfolios_db: dict[str, PortfolioState] = {}
 
 
@@ -93,6 +94,9 @@ async def submit_paper_order(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=fill.rejection_reason or "Order rejected.",
         )
+
+    await db_repo.save_portfolio(p.model_dump())
+    await db_repo.save_order(fill.model_dump())
 
     return fill
 

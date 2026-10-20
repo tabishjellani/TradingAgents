@@ -10,9 +10,9 @@ Enforces strict defense-in-depth safety controls:
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any, Literal
-import logging
 
 from pydantic import BaseModel, Field
 
@@ -104,7 +104,7 @@ class LiveSafetyManager:
             violations.append("Live trading is hard-disabled in backend configuration (ENABLE_LIVE_TRADING=False).")
 
         # 3. Notional Value Check
-        clean_symbol = safe_ticker_component(order.symbol.strip().upper())
+        safe_ticker_component(order.symbol.strip().upper())
         exec_price = order.limit_price or current_price
         notional = order.quantity * exec_price
 

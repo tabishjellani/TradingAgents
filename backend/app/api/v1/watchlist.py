@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from backend.app.auth import UserClaims, get_current_user
+from backend.app.db.repository import db_repo
 from tradingagents.dataflows.symbols import crypto_base, safe_ticker_component
 
 router = APIRouter(prefix="/api/v1/watchlists", tags=["Watchlists"])
@@ -27,7 +28,7 @@ class WatchlistModel(BaseModel):
     items: list[WatchlistItem] = Field(default_factory=list)
 
 
-# In-memory store fallback for development
+# In-memory runtime cache synchronized with db_repo
 _watchlists_db: dict[str, WatchlistModel] = {}
 
 
@@ -65,6 +66,7 @@ async def create_watchlist(
     """Create a new custom watchlist."""
     wl = WatchlistModel(user_id=current_user.id, name=name.strip())
     _watchlists_db[wl.id] = wl
+    await db_repo.save_watchlist(wl.model_dump())
     return wl
 
 

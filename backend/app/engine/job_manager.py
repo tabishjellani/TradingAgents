@@ -9,6 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from backend.app.db.repository import db_repo
 from backend.app.engine.adapter import execute_research_run
 
 
@@ -86,6 +87,7 @@ class JobManager:
             current_step="Initializing agent team environment",
         )
         self._jobs[job.id] = job
+        asyncio.create_task(db_repo.save_research_job(job.model_dump()))
 
         # Launch non-blocking background task
         task = asyncio.create_task(
@@ -108,6 +110,7 @@ class JobManager:
         job.status = "running"
         job.progress_percent = 25
         job.current_step = "Analyst team gathering market data and news"
+        await db_repo.save_research_job(job.model_dump())
 
         try:
             # Execute synchronous graph propagate in thread pool
@@ -148,16 +151,19 @@ class JobManager:
             job.progress_percent = 100
             job.current_step = "Research consensus complete"
             job.completed_at = datetime.now(UTC).isoformat()
+            await db_repo.save_research_job(job.model_dump())
 
         except asyncio.CancelledError:
             job.status = "cancelled"
             job.current_step = "Execution cancelled"
             job.completed_at = datetime.now(UTC).isoformat()
+            await db_repo.save_research_job(job.model_dump())
         except Exception as exc:
             job.status = "failed"
             job.error_message = str(exc)
             job.current_step = f"Execution failed: {exc}"
             job.completed_at = datetime.now(UTC).isoformat()
+            await db_repo.save_research_job(job.model_dump())
 
 
 # Global singleton job manager

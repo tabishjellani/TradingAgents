@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, computed_field
 
 from tradingagents.dataflows.symbols import crypto_base, normalize_symbol, safe_ticker_component
 

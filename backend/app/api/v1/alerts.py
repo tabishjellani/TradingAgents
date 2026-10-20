@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from backend.app.auth import UserClaims, get_current_user
+from backend.app.db.repository import db_repo
 from backend.app.engine.alert_evaluator import (
     AlertRuleModel,
     NotificationModel,
@@ -45,7 +46,9 @@ async def create_user_alert(
         threshold=req.threshold,
         cooldown_minutes=req.cooldown_minutes,
     )
-    return alert_evaluator.add_rule(rule)
+    saved = alert_evaluator.add_rule(rule)
+    await db_repo.save_alert_rule(saved.model_dump())
+    return saved
 
 
 @router.delete("/{alert_id}")
@@ -60,6 +63,7 @@ async def delete_user_alert(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Alert rule not found.",
         )
+    await db_repo.delete_alert_rule(alert_id, current_user.id)
     return {"status": "deleted", "alert_id": alert_id}
 
 

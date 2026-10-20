@@ -57,8 +57,8 @@ async def run_backtest_sweep(
         cells = len(clean_tickers) * len(dates)
 
         # Calculate metrics using actual historical market data from yfinance
-        import yfinance as yf
         import pandas as pd
+        import yfinance as yf
 
         benchmark = "SPY"
         # Download historical data for tickers + benchmark
@@ -72,7 +72,7 @@ async def run_backtest_sweep(
         )
 
         close_df = data.get("Close") if isinstance(data, pd.DataFrame) else None
-        
+
         alphas: list[float] = []
         hits: int = 0
         total_evaluations: int = 0

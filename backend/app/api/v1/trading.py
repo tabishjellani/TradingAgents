@@ -4,7 +4,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from backend.app.auth import UserClaims, get_current_user, require_admin
+from backend.app.auth import UserClaims, get_current_user
 from backend.app.config import settings
 from backend.app.engine.live_safety import (
     KillSwitchActiveError,

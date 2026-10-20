@@ -32,8 +32,14 @@ def decode_token(token: str) -> UserClaims:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # 1. Support deterministic test mock tokens (for isolated unit tests and offline dev)
+    # 1. Support deterministic test mock tokens (only allowed during offline tests and non-production development)
     if token.startswith("test-token:"):
+        if settings.environment == "production":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Synthetic test tokens are strictly prohibited in production mode. A valid Supabase JWT is required.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         parts = token.split(":")
         if len(parts) >= 4:
             return UserClaims(id=parts[1], email=parts[2], role=parts[3])
