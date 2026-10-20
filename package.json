@@ -1,0 +1,13 @@
+{
+  "name": "tradingagents-workspace",
+  "version": "0.7.0",
+  "private": true,
+  "description": "TradingAgents PWA: Full-stack AI financial research and trading platform",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build",
+    "preview": "npm --prefix frontend run preview",
+    "backend:dev": "powershell -Command \".\\.venv\\Scripts\\uvicorn backend.app.main:app --reload --port 8000\"",
+    "start": "powershell -ExecutionPolicy Bypass -File .\\start-dev.ps1"
+  }
+}

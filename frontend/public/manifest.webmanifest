@@ -1,0 +1,18 @@
+{
+  "name": "TradingAgents PWA",
+  "short_name": "TradingAgents",
+  "description": "Multi-agent LLM financial research, stock & crypto analysis, backtesting, and paper trading platform.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "productivity", "utilities"]
+}
