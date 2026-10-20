@@ -11,10 +11,14 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from backend.app.api.v1.admin import router as admin_router
+from backend.app.api.v1.alerts import router as alerts_router
+from backend.app.api.v1.backtest import router as backtest_router
 from backend.app.api.v1.market import router as market_router
+from backend.app.api.v1.portfolio import router as portfolio_router
 from backend.app.api.v1.research import router as research_router
 from backend.app.api.v1.watchlist import router as watchlist_router
-from backend.app.auth import UserClaims, get_current_user, require_admin
+from backend.app.auth import UserClaims, get_current_user
 from backend.app.config import settings
 
 _START_TIME = datetime.now(UTC)
@@ -44,7 +48,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin_router)
+app.include_router(alerts_router)
+app.include_router(backtest_router)
 app.include_router(market_router)
+app.include_router(portfolio_router)
 app.include_router(research_router)
 app.include_router(watchlist_router)
 
@@ -100,22 +108,6 @@ async def get_user_profile(
         "daily_job_quota": settings.user_daily_job_quota,
     }
 
-
-@app.get("/api/v1/admin/audit-logs", tags=["Admin"])
-async def get_admin_audit_logs(
-    admin: Annotated[UserClaims, Depends(require_admin)],
-) -> dict[str, Any]:
-    """Protected admin endpoint: returns security audit logs."""
-    return {
-        "admin_id": admin.id,
-        "events": [
-            {
-                "action": "SYSTEM_STARTUP",
-                "actor": "System",
-                "timestamp": datetime.now(UTC).isoformat(),
-            }
-        ],
-    }
 
 
 @app.exception_handler(Exception)

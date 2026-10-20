@@ -86,8 +86,8 @@ async def test_admin_granted_admin_endpoint():
         )
         assert res.status_code == 200
         data = res.json()
-        assert data["admin_id"] == "adm-99999"
-        assert len(data["events"]) > 0
+        assert isinstance(data, list)
+        assert len(data) > 0
 
 
 @pytest.mark.asyncio
