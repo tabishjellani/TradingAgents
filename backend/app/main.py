@@ -11,6 +11,9 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from backend.app.api.v1.market import router as market_router
+from backend.app.api.v1.research import router as research_router
+from backend.app.api.v1.watchlist import router as watchlist_router
 from backend.app.auth import UserClaims, get_current_user, require_admin
 from backend.app.config import settings
 
@@ -40,6 +43,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(market_router)
+app.include_router(research_router)
+app.include_router(watchlist_router)
 
 
 @app.get("/health", tags=["System"])
