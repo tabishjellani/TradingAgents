@@ -1,0 +1,29 @@
+# Requirements Traceability Matrix (Phase 0)
+
+This matrix establishes 100% bidirectional traceability between the MASTER PROMPT requirements and the implementation assets.
+
+| Requirement ID | Master Prompt Section | Description | Target Module / Files | Upstream vs. New | Verification & Test Strategy | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **REQ-01** | §1, §4.3 | Multi-Agent Research Engine | `tradingagents/graph/trading_graph.py`, `backend/app/engine/adapter.py` | Upstream reused; New FastAPI adapter | Unit tests; mock & live provider test | Phase 0 Verified / Phase 3 Planned |
+| **REQ-02** | §4.1, §5.8 | Installable Progressive Web App | `frontend/`, `frontend/public/manifest.webmanifest`, `frontend/src/sw.ts` | New React 19 + TypeScript PWA | PWA manifest validation, Lighthouse audit, SW offline test | Phase 1 / Phase 7 Planned |
+| **REQ-03** | §4.2, §8 | Cloudflare Pages & Worker Gateway | `cloudflare/worker.ts`, Cloudflare Pages build config | New Cloudflare configuration | Wrangler local preview, edge proxy tests | Phase 1 / Phase 9 Planned |
+| **REQ-04** | §4.4, §6 | Supabase Auth & PostgreSQL Schema | `supabase/migrations/*.sql`, `frontend/src/lib/supabase.ts` | New Supabase integration | Migration parsing, RLS unit tests, auth token tests | Phase 2 Planned |
+| **REQ-05** | §4.4, §6 | Row Level Security (RLS) & Tenant Isolation | `supabase/migrations/002_rls_policies.sql`, `backend/tests/test_rls.py` | New SQL policies | Cross-user read/write denial tests | Phase 2 Planned |
+| **REQ-06** | §4.5, §8 | Free-First AI Provider Integration | `tradingagents/llm_clients/`, `backend/app/config.py` | Upstream catalog reused; New quota manager | Gemini / Groq / Ollama integration tests | Phase 3 Planned |
+| **REQ-07** | §5.1 | User & Role Management (RBAC) | `supabase/migrations/001_initial_schema.sql`, `backend/app/auth/` | New server-side RBAC | Test asserting self-service role escalation is rejected | Phase 2 / Phase 6 Planned |
+| **REQ-08** | §5.2 | Market Dashboard & Symbol Resolution | `tradingagents/dataflows/symbols.py`, `backend/app/api/v1/market.py`, `frontend/src/pages/Dashboard.tsx` | Upstream symbols logic reused; New API & UI | Symbol normalization tests, Candlestick chart tests | Phase 4 Planned |
+| **REQ-09** | §5.2 | Cryptocurrency Support | `tradingagents/dataflows/symbols.py`, `frontend/src/pages/Dashboard.tsx` | Upstream crypto support reused; New UI filter | Crypto pair format tests, crypto news/sentiment tests | Phase 4 Planned |
+| **REQ-10** | §5.3 | Asynchronous Research Workspace | `backend/app/api/v1/research.py`, `frontend/src/pages/Research.tsx` | New FastAPI endpoints + UI | Job state transition tests, SSE/polling tests | Phase 3 Planned |
+| **REQ-11** | §5.3, §5.9 | Multi-Format Report Persistence & Export | `tradingagents/reporting.py`, `tradingagents/report_html.py`, `backend/app/services/exporter.py` | Upstream report generators reused; New sanitized exporter | CSV formula injection test, Markdown/HTML export tests | Phase 3 / Phase 6 Planned |
+| **REQ-12** | §5.4 | Historical Backtesting Engine | `tradingagents/backtest.py`, `backend/app/api/v1/backtest.py`, `frontend/src/pages/Backtest.tsx` | Upstream rating grid reused; New API & UI | Deterministic fixture tests, lookahead bias prevention tests | Phase 5 Planned |
+| **REQ-13** | §5.5 | Paper Trading & Portfolio Ledger | `backend/app/engine/paper_trading.py`, `backend/app/api/v1/portfolio.py`, `frontend/src/pages/Portfolio.tsx` | New quantitative simulator & ledger | Decimal precision tests, cash balance & fee reconciliation tests | Phase 5 Planned |
+| **REQ-14** | §5.6 | Scheduled Price Alerts | `backend/app/engine/alert_evaluator.py`, `backend/app/api/v1/alerts.py`, `frontend/src/pages/Alerts.tsx` | New background evaluator | Scheduled alert trigger tests, cooldown & duplicate prevention tests | Phase 6 Planned |
+| **REQ-15** | §5.7 | Administration & Quota Controls | `backend/app/api/v1/admin.py`, `frontend/src/pages/Admin.tsx` | New admin API & dashboard | Quota hard-stop tests, audit log append tests | Phase 6 Planned |
+| **REQ-16** | §5.8 | Offline Saved Reports Viewing | `frontend/src/sw.ts`, `frontend/src/lib/offline_store.ts` | New Service Worker & IndexedDB store | Disconnected browser report loading test | Phase 7 Planned |
+| **REQ-17** | §7 | Live Trading Safety Controls & Kill Switch | `backend/app/engine/broker_interface.py`, `backend/app/api/v1/trading.py` | New safety architecture (Disabled by default) | Fail-closed tests, kill switch abort tests, risk limit tests | Phase 8 Planned |
+| **REQ-18** | §8 | Zero-Cost Deployment Architecture | `docs/deployment/free-tier-and-costs.md`, local Windows worker scripts | New architecture documentation & scripts | Verification of zero required paid subscriptions | Phase 9 Planned |
+| **REQ-19** | §10 | Comprehensive Test Suite | `tests/`, `backend/tests/`, `frontend/src/__tests__/` | 1,353 upstream tests passed; New backend/frontend tests | Pytest, TypeScript compiler, Playwright/Vitest | Continuous across all phases |
+| **REQ-20** | §11 | Windows-First Developer Experience | `start-dev.ps1`, `docs/deployment/windows-setup.md` | New PowerShell workflows & docs | Tested on Windows 11 host with Python 3.14 + Node v24 | Phase 1 / Phase 9 Planned |
+| **REQ-21** | §12 | GitHub Actions CI/CD Pipeline | `.github/workflows/ci.yml` | New multi-job workflow | Automated push/PR validation | Phase 1 Planned |
+| **REQ-22** | §13 | Technical Documentation Deliverables | `docs/**/*.md`, `README.md` | New comprehensive documentation | Manual review and links verification | Phases 0 through 9 |
+| **REQ-23** | §2, §13 | Upstream Attribution & License Preservation | `LICENSE`, `docs/licensing/upstream-attribution.md` | Preserved Apache-2.0 upstream notices | License check & attribution file | Phase 9 Planned |

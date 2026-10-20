@@ -220,4 +220,10 @@ __marimo__/
 
 # Enterprise env file (secrets) and generated run reports
 .env.enterprise
+.env
+.env.local
+.env.*.local
 reports/
+.venv/
+node_modules/
+dist/
