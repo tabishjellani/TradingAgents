@@ -1,52 +1,15 @@
-import React, { useState } from 'react';
-import { Briefcase, ArrowUpRight, PlusCircle, ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Briefcase, ArrowUpRight, PlusCircle, ShieldCheck, AlertCircle } from 'lucide-react';
 import type { PaperPosition, PaperOrder } from '../types';
+import { fetchPortfolios, submitPaperOrder } from '../lib/api';
 
 export const Portfolio: React.FC = () => {
-  const [cash, setCash] = useState<number>(45250.00);
-  const [positions] = useState<PaperPosition[]>([
-    {
-      symbol: 'NVDA',
-      assetType: 'stock',
-      quantity: 150,
-      averagePrice: 124.50,
-      currentPrice: 138.25,
-      unrealizedPnL: 2062.50,
-      unrealizedPnLPercent: 11.04,
-    },
-    {
-      symbol: 'AAPL',
-      assetType: 'stock',
-      quantity: 80,
-      averagePrice: 228.00,
-      currentPrice: 234.50,
-      unrealizedPnL: 520.00,
-      unrealizedPnLPercent: 2.85,
-    },
-    {
-      symbol: 'BTC-USD',
-      assetType: 'crypto',
-      quantity: 0.35,
-      averagePrice: 91200.00,
-      currentPrice: 94820.00,
-      unrealizedPnL: 1267.00,
-      unrealizedPnLPercent: 3.97,
-    },
-  ]);
-
-  const [orders, setOrders] = useState<PaperOrder[]>([
-    {
-      id: 'ord-101',
-      symbol: 'NVDA',
-      side: 'buy',
-      orderType: 'market',
-      quantity: 50,
-      price: 138.25,
-      status: 'filled',
-      timestamp: '2026-10-20 14:32:00',
-      fees: 0.00,
-    },
-  ]);
+  const [portfolioId, setPortfolioId] = useState<string>('');
+  const [cash, setCash] = useState<number>(100000.00);
+  const [positions, setPositions] = useState<PaperPosition[]>([]);
+  const [orders, setOrders] = useState<PaperOrder[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [orderSymbol, setOrderSymbol] = useState('NVDA');
   const [orderQty, setOrderQty] = useState(10);
@@ -59,32 +22,37 @@ export const Portfolio: React.FC = () => {
   const totalEquity = cash + totalPositionsValue;
   const totalUnrealizedPnL = positions.reduce((acc, p) => acc + p.unrealizedPnL, 0);
 
-  const handlePlaceOrder = () => {
-    const price = orderSymbol === 'BTC-USD' ? 94820.00 : 138.25;
-    const cost = price * orderQty;
-
-    if (orderSide === 'buy' && cost > cash) {
-      alert('Insufficient paper cash for this order.');
-      return;
+  const loadPortfolio = async () => {
+    try {
+      const data = await fetchPortfolios();
+      setPortfolioId(data.id);
+      setCash(data.cash);
+      setPositions(data.positions);
+      setOrders(data.orders);
+    } catch (err: any) {
+      console.warn("Could not load portfolio:", err);
     }
+  };
 
-    const newOrder: PaperOrder = {
-      id: `ord-${Date.now().toString().slice(-4)}`,
-      symbol: orderSymbol,
-      side: orderSide,
-      orderType: 'market',
-      quantity: orderQty,
-      price,
-      status: 'filled',
-      timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
-      fees: 0.00,
-    };
+  useEffect(() => {
+    loadPortfolio();
+  }, []);
 
-    setOrders([newOrder, ...orders]);
-    if (orderSide === 'buy') {
-      setCash((prev) => prev - cost);
-    } else {
-      setCash((prev) => prev + cost);
+  const handlePlaceOrder = async () => {
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      await submitPaperOrder(portfolioId, {
+        symbol: orderSymbol,
+        side: orderSide,
+        quantity: orderQty,
+        order_type: 'market',
+      });
+      await loadPortfolio();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Order execution failed.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -259,10 +227,72 @@ export const Portfolio: React.FC = () => {
             />
           </div>
 
-          <button className="btn btn-primary" style={{ marginTop: 'auto' }} onClick={handlePlaceOrder}>
-            Submit Paper Order
+          {errorMessage && (
+            <div style={{ color: 'var(--color-bearish)', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <AlertCircle size={14} /> {errorMessage}
+            </div>
+          )}
+
+          <button
+            className="btn btn-primary"
+            style={{ marginTop: 'auto' }}
+            disabled={isSubmitting}
+            onClick={handlePlaceOrder}
+          >
+            {isSubmitting ? 'Executing Order...' : 'Submit Paper Order'}
           </button>
         </div>
+      </div>
+
+      {/* Order Ledger Table */}
+      <div className="card" style={{ marginTop: '1.5rem' }}>
+        <div className="card-header">
+          <h2 className="card-title">
+            <Briefcase size={18} color="var(--accent-cyan)" />
+            Paper Order Execution History
+          </h2>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            Reconciled against simulated fills & fees
+          </span>
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
+              <th style={{ padding: '0.6rem 0.8rem' }}>Order ID</th>
+              <th style={{ padding: '0.6rem 0.8rem' }}>Symbol</th>
+              <th style={{ padding: '0.6rem 0.8rem' }}>Side</th>
+              <th style={{ padding: '0.6rem 0.8rem', textAlign: 'right' }}>Quantity</th>
+              <th style={{ padding: '0.6rem 0.8rem', textAlign: 'right' }}>Price</th>
+              <th style={{ padding: '0.6rem 0.8rem', textAlign: 'center' }}>Status</th>
+              <th style={{ padding: '0.6rem 0.8rem', textAlign: 'right' }}>Timestamp</th>
+            </tr>
+          </thead>
+          <tbody>
+            {orders.length === 0 ? (
+              <tr>
+                <td colSpan={7} style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  No orders placed yet. Use the form above to simulate a paper trade.
+                </td>
+              </tr>
+            ) : (
+              orders.map((o) => (
+                <tr key={o.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                  <td style={{ padding: '0.6rem 0.8rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>{o.id.slice(0, 8)}</td>
+                  <td style={{ padding: '0.6rem 0.8rem', fontWeight: 600 }}>{o.symbol}</td>
+                  <td style={{ padding: '0.6rem 0.8rem', textTransform: 'uppercase', color: o.side === 'buy' ? 'var(--color-bullish)' : 'var(--color-bearish)', fontWeight: 600 }}>{o.side}</td>
+                  <td style={{ padding: '0.6rem 0.8rem', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{o.quantity}</td>
+                  <td style={{ padding: '0.6rem 0.8rem', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${o.price.toFixed(2)}</td>
+                  <td style={{ padding: '0.6rem 0.8rem', textAlign: 'center' }}>
+                    <span style={{ padding: '0.15rem 0.4rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem', background: 'rgba(0, 230, 118, 0.15)', color: 'var(--color-bullish)' }}>
+                      {o.status}
+                    </span>
+                  </td>
+                  <td style={{ padding: '0.6rem 0.8rem', textAlign: 'right', color: 'var(--text-muted)' }}>{o.timestamp?.slice(0, 19).replace('T', ' ')}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

@@ -1,12 +1,46 @@
-import React from 'react';
-import { ShieldCheck, Activity } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ShieldCheck, Activity, AlertTriangle } from 'lucide-react';
 import type { SystemHealth } from '../types';
+import { fetchAdminTelemetry, triggerKillSwitch } from '../lib/api';
 
 interface AdminProps {
   health: SystemHealth;
 }
 
 export const Admin: React.FC<AdminProps> = ({ health }) => {
+  const [telemetry, setTelemetry] = useState<any>(null);
+  const [killSwitchActive, setKillSwitchActive] = useState(false);
+  const [killSwitchMessage, setKillSwitchMessage] = useState<string | null>(null);
+  const [isTriggering, setIsTriggering] = useState(false);
+
+  const loadTelemetry = async () => {
+    try {
+      const data = await fetchAdminTelemetry();
+      setTelemetry(data);
+    } catch (err: any) {
+      console.warn("Telemetry fetch error:", err);
+    }
+  };
+
+  useEffect(() => {
+    loadTelemetry();
+  }, []);
+
+  const handleToggleKillSwitch = async () => {
+    setIsTriggering(true);
+    setKillSwitchMessage(null);
+    try {
+      const action = killSwitchActive ? 'deactivate' : 'activate';
+      const res = await triggerKillSwitch(action, 'Operator toggle from Admin UI');
+      setKillSwitchActive(res.kill_switch_active);
+      setKillSwitchMessage(res.message);
+    } catch (err: any) {
+      setKillSwitchMessage(err.message || 'Kill switch operation failed.');
+    } finally {
+      setIsTriggering(false);
+    }
+  };
+
   const auditLogs = [
     { id: 1, action: 'SYSTEM_STARTUP', actor: 'LocalDaemon', timestamp: '2026-10-20 18:12:00', status: 'SUCCESS' },
     { id: 2, action: 'RESEARCH_JOB_COMPLETED', actor: 'local_user', timestamp: '2026-10-20 18:22:15', status: 'SUCCESS' },
@@ -26,19 +60,29 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
       </div>
 
       {/* Safety Gate Warning & Kill Switch Status */}
-      <div className="card" style={{ borderLeft: '4px solid var(--accent-cyan)' }}>
+      <div className="card" style={{ borderLeft: killSwitchActive ? '4px solid var(--color-bearish)' : '4px solid var(--accent-cyan)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, fontSize: '1.1rem' }}>
-              <ShieldCheck size={20} color="var(--accent-cyan)" />
-              Mandatory Live Trading Safety Gate
+              <ShieldCheck size={20} color={killSwitchActive ? 'var(--color-bearish)' : 'var(--accent-cyan)'} />
+              Mandatory Live Trading Safety Gate: {killSwitchActive ? 'EMERGENCY SHUTDOWN ACTIVE' : 'SECURE'}
             </div>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
-              Live execution is hard-disabled at the server boundary. The system will reject all live broker orders.
+              Live execution is hard-disabled at the server boundary. All real broker transmissions are strictly rejected.
             </p>
+            {killSwitchMessage && (
+              <p style={{ fontSize: '0.8rem', color: 'var(--accent-cyan)', marginTop: '0.2rem' }}>
+                {killSwitchMessage}
+              </p>
+            )}
           </div>
-          <button className="btn btn-danger" style={{ opacity: 0.7, cursor: 'not-allowed' }} disabled>
-            Emergency Kill Switch (Armed)
+          <button
+            className={`btn ${killSwitchActive ? 'btn-primary' : 'btn-danger'}`}
+            disabled={isTriggering}
+            onClick={handleToggleKillSwitch}
+          >
+            <AlertTriangle size={16} />
+            {isTriggering ? 'Executing...' : killSwitchActive ? 'Deactivate Kill Switch' : 'Trigger Emergency Kill Switch'}
           </button>
         </div>
       </div>
@@ -47,9 +91,11 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
       <div className="grid-3">
         <div className="stat-box">
           <span className="stat-label">Daily Free AI Quota</span>
-          <span className="stat-value">4 / 20</span>
+          <span className="stat-value">
+            {telemetry?.quota_consumed ?? 0} / {telemetry?.daily_job_quota ?? 20}
+          </span>
           <span style={{ fontSize: '0.75rem', color: 'var(--color-bullish)' }}>
-            80% Daily Capacity Remaining
+            {(100 - ((telemetry?.quota_consumed ?? 0) / (telemetry?.daily_job_quota ?? 20)) * 100).toFixed(0)}% Daily Capacity Remaining
           </span>
         </div>
         <div className="stat-box">
@@ -65,7 +111,7 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
             {health.defaultAiProvider.toUpperCase()}
           </span>
           <span style={{ fontSize: '0.75rem', color: 'var(--accent-cyan)' }}>
-            Gemini 3.8 Flash Free Tier
+            Free Tier Enabled
           </span>
         </div>
       </div>
@@ -75,52 +121,48 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
         <div className="card-header">
           <h2 className="card-title">
             <Activity size={18} color="var(--accent-cyan)" />
-            Security Audit Trail
+            Security & Administration Audit Trail
           </h2>
           <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            Append-only security events
+            Append-only cryptographic event ledger
           </span>
         </div>
 
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
-              <th style={{ padding: '0.6rem 0.8rem' }}>Timestamp</th>
-              <th style={{ padding: '0.6rem 0.8rem' }}>Action</th>
-              <th style={{ padding: '0.6rem 0.8rem' }}>Actor</th>
-              <th style={{ padding: '0.6rem 0.8rem' }}>Result Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {auditLogs.map((log) => (
-              <tr key={log.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                <td style={{ padding: '0.8rem', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  {log.timestamp}
-                </td>
-                <td style={{ padding: '0.8rem', fontWeight: 600 }}>
-                  {log.action}
-                </td>
-                <td style={{ padding: '0.8rem', color: 'var(--text-secondary)' }}>
-                  {log.actor}
-                </td>
-                <td style={{ padding: '0.8rem' }}>
-                  <span
-                    style={{
-                      fontSize: '0.7rem',
-                      padding: '2px 8px',
-                      borderRadius: 'var(--radius-full)',
-                      background: log.status.includes('SUCCESS') ? 'var(--color-bullish-subtle)' : 'var(--color-bearish-subtle)',
-                      color: log.status.includes('SUCCESS') ? 'var(--color-bullish)' : 'var(--color-bearish)',
-                      fontWeight: 600,
-                    }}
-                  >
-                    {log.status}
-                  </span>
-                </td>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>
+                <th style={{ padding: '0.75rem 1rem' }}>Event ID</th>
+                <th style={{ padding: '0.75rem 1rem' }}>Action</th>
+                <th style={{ padding: '0.75rem 1rem' }}>Actor</th>
+                <th style={{ padding: '0.75rem 1rem' }}>Timestamp</th>
+                <th style={{ padding: '0.75rem 1rem' }}>Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {auditLogs.map((log) => (
+                <tr key={log.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                  <td style={{ padding: '0.75rem 1rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>#{log.id}</td>
+                  <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>{log.action}</td>
+                  <td style={{ padding: '0.75rem 1rem', fontFamily: 'var(--font-mono)' }}>{log.actor}</td>
+                  <td style={{ padding: '0.75rem 1rem', color: 'var(--text-secondary)' }}>{log.timestamp}</td>
+                  <td style={{ padding: '0.75rem 1rem' }}>
+                    <span style={{
+                      padding: '0.2rem 0.5rem',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      background: log.status.includes('BLOCKED') ? 'rgba(255, 68, 68, 0.15)' : 'rgba(0, 230, 118, 0.15)',
+                      color: log.status.includes('BLOCKED') ? 'var(--color-bearish)' : 'var(--color-bullish)',
+                    }}>
+                      {log.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

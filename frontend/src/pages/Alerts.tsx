@@ -1,54 +1,48 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Bell, Plus, CheckCircle, Trash2 } from 'lucide-react';
 import type { AlertRule } from '../types';
+import { fetchAlertRules, createAlertRule, deleteAlertRule } from '../lib/api';
 
 export const Alerts: React.FC = () => {
-  const [alerts, setAlerts] = useState<AlertRule[]>([
-    {
-      id: 'alt-1',
-      symbol: 'NVDA',
-      condition: 'above',
-      threshold: 145.00,
-      isActive: true,
-      cooldownMinutes: 60,
-      lastTriggered: '2026-10-18 11:20:00',
-    },
-    {
-      id: 'alt-2',
-      symbol: 'BTC-USD',
-      condition: 'below',
-      threshold: 90000.00,
-      isActive: true,
-      cooldownMinutes: 120,
-    },
-    {
-      id: 'alt-3',
-      symbol: 'AAPL',
-      condition: 'pct_change',
-      threshold: 3.0,
-      isActive: true,
-      cooldownMinutes: 30,
-    },
-  ]);
-
+  const [alerts, setAlerts] = useState<AlertRule[]>([]);
   const [newSymbol, setNewSymbol] = useState('NVDA');
   const [newCondition, setNewCondition] = useState<'above' | 'below' | 'pct_change'>('above');
   const [newThreshold, setNewThreshold] = useState(150.0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleAddAlert = () => {
-    const item: AlertRule = {
-      id: `alt-${Date.now().toString().slice(-4)}`,
-      symbol: newSymbol,
-      condition: newCondition,
-      threshold: newThreshold,
-      isActive: true,
-      cooldownMinutes: 60,
-    };
-    setAlerts([item, ...alerts]);
+  const loadAlerts = async () => {
+    try {
+      const data = await fetchAlertRules();
+      setAlerts(data);
+    } catch (err: any) {
+      console.warn("Could not load alerts:", err);
+    }
   };
 
-  const handleDeleteAlert = (id: string) => {
-    setAlerts(alerts.filter((a) => a.id !== id));
+  useEffect(() => {
+    loadAlerts();
+  }, []);
+
+  const handleAddAlert = async () => {
+    setIsSubmitting(true);
+    try {
+      await createAlertRule({
+        symbol: newSymbol,
+        condition: newCondition,
+        threshold: newThreshold,
+        cooldown_minutes: 60,
+      });
+      await loadAlerts();
+    } catch (err: any) {
+      console.warn("Failed to create alert:", err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteAlert = async (id: string) => {
+    await deleteAlertRule(id);
+    await loadAlerts();
   };
 
   return (
@@ -130,8 +124,13 @@ export const Alerts: React.FC = () => {
             />
           </div>
 
-          <button className="btn btn-primary" style={{ marginTop: '0.5rem' }} onClick={handleAddAlert}>
-            <Bell size={16} /> Save Alert Rule
+          <button
+            className="btn btn-primary"
+            style={{ marginTop: '0.5rem' }}
+            disabled={isSubmitting}
+            onClick={handleAddAlert}
+          >
+            <Bell size={16} /> {isSubmitting ? 'Saving Rule...' : 'Save Alert Rule'}
           </button>
         </div>
 

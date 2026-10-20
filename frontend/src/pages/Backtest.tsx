@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { History, Play, BarChart3, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { History, Play, BarChart3, ShieldCheck, AlertCircle } from 'lucide-react';
+import { runBacktest } from '../lib/api';
 
 export const Backtest: React.FC = () => {
   const [tickers, setTickers] = useState('NVDA, AAPL, MSFT');
@@ -7,14 +8,28 @@ export const Backtest: React.FC = () => {
   const [endDate, setEndDate] = useState('2026-09-01');
   const [interval, setInterval] = useState(7);
   const [isRunning, setIsRunning] = useState(false);
-  const [hasRun, setHasRun] = useState(true);
+  const [hasRun, setHasRun] = useState(false);
+  const [backtestResult, setBacktestResult] = useState<any>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleRunBacktest = () => {
+  const handleRunBacktest = async () => {
     setIsRunning(true);
-    setTimeout(() => {
-      setIsRunning(false);
+    setErrorMessage(null);
+    try {
+      const tickerList = tickers.split(',').map((t) => t.trim()).filter(Boolean);
+      const res = await runBacktest({
+        tickers: tickerList,
+        start_date: startDate,
+        end_date: endDate,
+        every_n_days: Number(interval),
+      });
+      setBacktestResult(res);
       setHasRun(true);
-    }, 2000);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Backtest simulation failed.');
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   return (
@@ -46,6 +61,7 @@ export const Backtest: React.FC = () => {
             <input
               type="text"
               value={tickers}
+              disabled={isRunning}
               onChange={(e) => setTickers(e.target.value)}
               style={{
                 width: '100%',
@@ -67,6 +83,7 @@ export const Backtest: React.FC = () => {
               <input
                 type="date"
                 value={startDate}
+                disabled={isRunning}
                 onChange={(e) => setStartDate(e.target.value)}
                 style={{
                   width: '100%',
@@ -75,7 +92,6 @@ export const Backtest: React.FC = () => {
                   background: 'var(--bg-secondary)',
                   border: '1px solid var(--border-subtle)',
                   fontFamily: 'var(--font-mono)',
-                  fontSize: '0.8rem',
                 }}
               />
             </div>
@@ -86,6 +102,7 @@ export const Backtest: React.FC = () => {
               <input
                 type="date"
                 value={endDate}
+                disabled={isRunning}
                 onChange={(e) => setEndDate(e.target.value)}
                 style={{
                   width: '100%',
@@ -94,7 +111,6 @@ export const Backtest: React.FC = () => {
                   background: 'var(--bg-secondary)',
                   border: '1px solid var(--border-subtle)',
                   fontFamily: 'var(--font-mono)',
-                  fontSize: '0.8rem',
                 }}
               />
             </div>
@@ -108,6 +124,7 @@ export const Backtest: React.FC = () => {
               type="number"
               value={interval}
               min="1"
+              disabled={isRunning}
               onChange={(e) => setInterval(Math.max(1, Number(e.target.value)))}
               style={{
                 width: '100%',
@@ -120,13 +137,19 @@ export const Backtest: React.FC = () => {
             />
           </div>
 
+          {errorMessage && (
+            <div style={{ color: 'var(--color-bearish)', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <AlertCircle size={14} /> {errorMessage}
+            </div>
+          )}
+
           <button
             className="btn btn-primary"
             style={{ marginTop: '0.5rem', padding: '0.75rem' }}
             disabled={isRunning}
             onClick={handleRunBacktest}
           >
-            {isRunning ? 'Simulating Historical Grid...' : (
+            {isRunning ? 'Calculating Historical Grid...' : (
               <>
                 <Play size={16} /> Run Backtest Sweep
               </>
@@ -136,28 +159,32 @@ export const Backtest: React.FC = () => {
 
         {/* Results Panel */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          {hasRun && (
+          {hasRun && backtestResult ? (
             <>
               <div className="grid-3">
                 <div className="stat-box">
                   <span className="stat-label">Decision Hit Rate</span>
-                  <span className="stat-value" style={{ color: 'var(--color-bullish)' }}>73.8%</span>
+                  <span className="stat-value" style={{ color: 'var(--color-bullish)' }}>
+                    {(backtestResult.hit_rate * 100).toFixed(1)}%
+                  </span>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                     Alpha &gt; 0 vs. Benchmark SPY
                   </span>
                 </div>
                 <div className="stat-box">
-                  <span className="stat-label">Average 5-Day Alpha</span>
-                  <span className="stat-value" style={{ color: 'var(--accent-cyan)' }}>+2.45%</span>
+                  <span className="stat-label">Average Period Alpha</span>
+                  <span className="stat-value" style={{ color: 'var(--accent-cyan)' }}>
+                    {backtestResult.mean_alpha >= 0 ? '+' : ''}{(backtestResult.mean_alpha * 100).toFixed(2)}%
+                  </span>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                     Excess Return over Benchmark
                   </span>
                 </div>
                 <div className="stat-box">
                   <span className="stat-label">Grid Cells Evaluated</span>
-                  <span className="stat-value">36</span>
+                  <span className="stat-value">{backtestResult.cells_count}</span>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    0 Lookahead Failures
+                    Point-in-Time Verified
                   </span>
                 </div>
               </div>
@@ -166,51 +193,25 @@ export const Backtest: React.FC = () => {
                 <div className="card-header">
                   <h3 className="card-title">
                     <BarChart3 size={18} color="var(--accent-cyan)" />
-                    5-Tier Rating Accuracy Breakdown
+                    Backtest Calculation Summary
                   </h3>
                 </div>
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
-                      <th style={{ padding: '0.6rem 0.8rem' }}>Rating Signal</th>
-                      <th style={{ padding: '0.6rem 0.8rem', textAlign: 'right' }}>Occurrences</th>
-                      <th style={{ padding: '0.6rem 0.8rem', textAlign: 'right' }}>Hit Rate</th>
-                      <th style={{ padding: '0.6rem 0.8rem', textAlign: 'right' }}>Mean Alpha</th>
-                      <th style={{ padding: '0.6rem 0.8rem', textAlign: 'center' }}>Outcome</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                      <td style={{ padding: '0.8rem' }}>
-                        <span className="badge-rating buy">BUY</span>
-                      </td>
-                      <td style={{ padding: '0.8rem', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>18</td>
-                      <td style={{ padding: '0.8rem', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--color-bullish)' }}>77.8%</td>
-                      <td style={{ padding: '0.8rem', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--color-bullish)' }}>+3.20%</td>
-                      <td style={{ padding: '0.8rem', textAlign: 'center' }}><CheckCircle2 size={16} color="var(--color-bullish)" /></td>
-                    </tr>
-                    <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                      <td style={{ padding: '0.8rem' }}>
-                        <span className="badge-rating hold">HOLD</span>
-                      </td>
-                      <td style={{ padding: '0.8rem', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>12</td>
-                      <td style={{ padding: '0.8rem', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>N/A (Neutral)</td>
-                      <td style={{ padding: '0.8rem', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>+0.15%</td>
-                      <td style={{ padding: '0.8rem', textAlign: 'center' }}><CheckCircle2 size={16} color="var(--color-neutral)" /></td>
-                    </tr>
-                    <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                      <td style={{ padding: '0.8rem' }}>
-                        <span className="badge-rating sell">SELL</span>
-                      </td>
-                      <td style={{ padding: '0.8rem', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>6</td>
-                      <td style={{ padding: '0.8rem', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--color-bullish)' }}>66.7%</td>
-                      <td style={{ padding: '0.8rem', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--color-bullish)' }}>-1.85%</td>
-                      <td style={{ padding: '0.8rem', textAlign: 'center' }}><CheckCircle2 size={16} color="var(--color-bullish)" /></td>
-                    </tr>
-                  </tbody>
-                </table>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                  {backtestResult.notes}
+                </p>
+                <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  Evaluated Tickers: <strong>{backtestResult.tickers?.join(', ')}</strong> | Period: <strong>{backtestResult.start_date}</strong> to <strong>{backtestResult.end_date}</strong>
+                </div>
               </div>
             </>
+          ) : (
+            <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '3rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+              <History size={40} style={{ opacity: 0.3, marginBottom: '1rem' }} />
+              <h3 style={{ fontSize: '1rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>Ready for Backtesting</h3>
+              <p style={{ fontSize: '0.85rem', maxWidth: '400px', lineHeight: 1.5 }}>
+                Enter ticker symbols and date range, then click <strong>Run Backtest Sweep</strong> to calculate real historical returns and benchmark alpha.
+              </p>
+            </div>
           )}
         </div>
       </div>

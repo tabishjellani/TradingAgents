@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, computed_field
 
 from tradingagents.dataflows.symbols import crypto_base, normalize_symbol, safe_ticker_component
 
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/v1/market", tags=["Market Data"])
 
 
 class MarketQuoteResponse(BaseModel):
-    """Standardized market price quote schema."""
+    """Standardized market price quote schema supporting dual snake_case and camelCase."""
 
     symbol: str
     canonical_symbol: str
@@ -31,6 +31,36 @@ class MarketQuoteResponse(BaseModel):
     timestamp: str
     is_delayed: bool
 
+    @computed_field
+    @property
+    def assetType(self) -> str:
+        return self.asset_type
+
+    @computed_field
+    @property
+    def canonicalSymbol(self) -> str:
+        return self.canonical_symbol
+
+    @computed_field
+    @property
+    def changePercent(self) -> float:
+        return self.change_percent
+
+    @computed_field
+    @property
+    def high24h(self) -> float:
+        return self.high_24h
+
+    @computed_field
+    @property
+    def low24h(self) -> float:
+        return self.low_24h
+
+    @computed_field
+    @property
+    def isDelayed(self) -> bool:
+        return self.is_delayed
+
 
 class OHLCVBar(BaseModel):
     """Single historical candlestick bar."""
@@ -43,49 +73,65 @@ class OHLCVBar(BaseModel):
     volume: float
 
 
+def _fetch_quote_data(symbol: str) -> MarketQuoteResponse:
+    """Internal helper to fetch quote from yfinance with defense against path traversal."""
+    clean_symbol = safe_ticker_component(symbol.strip().upper())
+    canonical = normalize_symbol(clean_symbol)
+    is_crypto = crypto_base(clean_symbol) is not None
+
+    import yfinance as yf
+    ticker = yf.Ticker(canonical)
+    info = ticker.fast_info
+
+    last_price = float(getattr(info, "last_price", 0.0) or 0.0)
+    prev_close = float(getattr(info, "previous_close", 0.0) or last_price or 1.0)
+    change = round(last_price - prev_close, 2)
+    change_pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
+
+    day_high = float(getattr(info, "day_high", 0.0) or last_price)
+    day_low = float(getattr(info, "day_low", 0.0) or last_price)
+    volume = float(getattr(info, "last_volume", 0.0) or 0.0)
+
+    if last_price == 0.0:
+        last_price = 100.0 if not is_crypto else 90000.0
+
+    return MarketQuoteResponse(
+        symbol=clean_symbol,
+        canonical_symbol=canonical,
+        name=f"{clean_symbol} ({canonical})",
+        asset_type="crypto" if is_crypto else "stock",
+        price=last_price,
+        change=change,
+        change_percent=change_pct,
+        volume=volume,
+        high_24h=day_high,
+        low_24h=day_low,
+        source="Yahoo Finance",
+        timestamp=datetime.now(UTC).isoformat(),
+        is_delayed=not is_crypto,
+    )
+
+
+@router.get("/quotes", response_model=list[MarketQuoteResponse])
+async def get_market_quotes(
+    symbols: str = Query("SPY,QQQ,NVDA,AAPL,BTC-USD,ETH-USD", description="Comma-separated symbols"),
+) -> list[MarketQuoteResponse]:
+    """Fetch live or delayed price quotes for a batch of symbols."""
+    results: list[MarketQuoteResponse] = []
+    symbol_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    for sym in symbol_list:
+        try:
+            results.append(_fetch_quote_data(sym))
+        except Exception as exc:
+            logger.warning("Could not fetch quote for %s in batch: %s", sym, exc)
+    return results
+
+
 @router.get("/quote/{symbol}", response_model=MarketQuoteResponse)
 async def get_market_quote(symbol: str) -> MarketQuoteResponse:
     """Fetch live or delayed price quote for a stock or crypto pair."""
     try:
-        clean_symbol = safe_ticker_component(symbol.strip().upper())
-        canonical = normalize_symbol(clean_symbol)
-        is_crypto = crypto_base(clean_symbol) is not None
-
-        # Fetch quote via yfinance (fail-open cached snapshot)
-        import yfinance as yf
-        ticker = yf.Ticker(canonical)
-        info = ticker.fast_info
-
-        # Extract pricing safely
-        last_price = float(getattr(info, "last_price", 0.0) or 0.0)
-        prev_close = float(getattr(info, "previous_close", 0.0) or last_price or 1.0)
-        change = round(last_price - prev_close, 2)
-        change_pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
-
-        day_high = float(getattr(info, "day_high", 0.0) or last_price)
-        day_low = float(getattr(info, "day_low", 0.0) or last_price)
-        volume = float(getattr(info, "last_volume", 0.0) or 0.0)
-
-        # Fallback to reasonable estimates if fast_info is completely blank
-        if last_price == 0.0:
-            last_price = 100.0 if not is_crypto else 90000.0
-
-        return MarketQuoteResponse(
-            symbol=clean_symbol,
-            canonical_symbol=canonical,
-            name=f"{clean_symbol} ({canonical})",
-            asset_type="crypto" if is_crypto else "stock",
-            price=last_price,
-            change=change,
-            change_percent=change_pct,
-            volume=volume,
-            high_24h=day_high,
-            low_24h=day_low,
-            source="Yahoo Finance",
-            timestamp=datetime.now(UTC).isoformat(),
-            is_delayed=not is_crypto,
-        )
-
+        return _fetch_quote_data(symbol)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

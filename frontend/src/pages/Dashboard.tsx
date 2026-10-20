@@ -47,36 +47,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ quotes, onSelectTickerForR
         </div>
       </div>
 
-      {/* Market Macro KPI Cards */}
+      {/* Market Macro KPI Cards (Dynamic from real quotes) */}
       <div className="grid-4">
-        <div className="stat-box">
-          <span className="stat-label">S&P 500 (SPY)</span>
-          <span className="stat-value">$592.40</span>
-          <span className="stat-change bullish">
-            <TrendingUp size={14} /> +0.64% Today
-          </span>
-        </div>
-        <div className="stat-box">
-          <span className="stat-label">Nasdaq 100 (QQQ)</span>
-          <span className="stat-value">$514.85</span>
-          <span className="stat-change bullish">
-            <TrendingUp size={14} /> +0.89% Today
-          </span>
-        </div>
-        <div className="stat-box">
-          <span className="stat-label">Bitcoin (BTC-USD)</span>
-          <span className="stat-value">$94,820.00</span>
-          <span className="stat-change bullish">
-            <TrendingUp size={14} /> +1.99% Today
-          </span>
-        </div>
-        <div className="stat-box">
-          <span className="stat-label">10Y Treasury Yield</span>
-          <span className="stat-value">4.24%</span>
-          <span className="stat-change bearish">
-            <TrendingDown size={14} /> -0.03 bps
-          </span>
-        </div>
+        {['SPY', 'QQQ', 'BTC-USD', 'NVDA'].map((targetSym) => {
+          const q = quotes.find((item) => item.symbol === targetSym);
+          const isBull = (q?.changePercent ?? 0) >= 0;
+          return (
+            <div key={targetSym} className="stat-box">
+              <span className="stat-label">{targetSym === 'SPY' ? 'S&P 500 (SPY)' : targetSym === 'QQQ' ? 'Nasdaq 100 (QQQ)' : targetSym === 'BTC-USD' ? 'Bitcoin (BTC)' : 'NVIDIA (NVDA)'}</span>
+              <span className="stat-value">
+                {q ? `$${q.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+              </span>
+              <span className={`stat-change ${isBull ? 'bullish' : 'bearish'}`}>
+                {isBull ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+                {q ? `${isBull ? '+' : ''}${q.changePercent.toFixed(2)}% Today` : 'Syncing quote...'}
+              </span>
+            </div>
+          );
+        })}
       </div>
 
       {/* Main Watchlist Table */}
