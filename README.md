@@ -29,6 +29,26 @@
 
 # TradingAgents: Multi-Agents LLM Financial Trading Framework
 
+> ### 🚀 TradingAgents Progressive Web App (PWA) Edition
+> A complete, free-first, installable Progressive Web App (PWA) with a **React 19 & TypeScript** frontend, **FastAPI** backend, **Supabase** Auth & PostgreSQL with Row Level Security, **Cloudflare Pages/Workers** edge gateway, quantitative **Decimal-precision paper trading ledger**, server-side alert evaluator, and a **hard-disabled fail-closed live trading safety manager**.
+>
+> 📖 **Full Documentation**:
+> - [Repository Audit](docs/architecture/repository-audit.md) | [System Design](docs/architecture/system-design.md) | [Requirements Traceability](docs/architecture/requirements-traceability.md)
+> - [Threat Model](docs/security/threat-model.md) | [Secrets Management](docs/security/secrets-and-credentials.md) | [Live Safety Architecture](docs/security/live-trading-safety.md)
+> - [Windows Setup](docs/deployment/windows-setup.md) | [Supabase Setup](docs/deployment/supabase-setup.md) | [Cloudflare Setup](docs/deployment/cloudflare-setup.md) | [Free-Tier & Costs](docs/deployment/free-tier-and-costs.md)
+> - [Testing Guide](docs/development/testing.md) | [Troubleshooting](docs/operations/troubleshooting.md) | [Upstream Attribution](docs/licensing/upstream-attribution.md)
+>
+> **Quick Start (Windows PowerShell)**:
+> ```powershell
+> # 1. Run full stack dev servers (FastAPI on :8000 + React PWA on :5173)
+> .\start-dev.ps1
+>
+> # 2. Run the 27 full backend tests
+> .\.venv\Scripts\pytest.exe backend/tests/ -v
+> ```
+
+---
+
 ## News
 
 <!-- news:start -->
