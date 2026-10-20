@@ -37,6 +37,7 @@ async def submit_research_job(
         asset_type=request.asset_type,
         analysts=request.analysts,
         config_overrides=request.config_overrides,
+        token=current_user.token,
     )
 
 

@@ -29,7 +29,8 @@ export const Header: React.FC<HeaderProps> = ({
       const { data } = await supabase.auth.getSession();
       if (data.session) {
         setAuthToken(data.session.access_token);
-        const role = data.session.user.app_metadata?.role || data.session.user.user_metadata?.role || 'user';
+        // Admin status strictly obtained from trusted server/app_metadata claim
+        const role = data.session.user.app_metadata?.role || 'user';
         setCurrentUser({ email: data.session.user.email || 'Authenticated User', role });
         return;
       }
@@ -38,8 +39,13 @@ export const Header: React.FC<HeaderProps> = ({
     const token = getAuthToken();
     if (token) {
       if (token.startsWith('test-token:')) {
-        const parts = token.split(':');
-        setCurrentUser({ email: parts[2] || 'dev@tradingagents.local', role: parts[3] || 'user' });
+        if (!import.meta.env.PROD) {
+          const parts = token.split(':');
+          setCurrentUser({ email: parts[2] || 'dev@tradingagents.local', role: parts[3] || 'user' });
+        } else {
+          setAuthToken(null);
+          setCurrentUser(null);
+        }
       } else {
         setCurrentUser({ email: 'Authenticated User', role: 'user' });
       }
@@ -55,7 +61,7 @@ export const Header: React.FC<HeaderProps> = ({
       const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
         if (session) {
           setAuthToken(session.access_token);
-          const role = session.user.app_metadata?.role || session.user.user_metadata?.role || 'user';
+          const role = session.user.app_metadata?.role || 'user';
           setCurrentUser({ email: session.user.email || 'Authenticated User', role });
         } else {
           setAuthToken(null);

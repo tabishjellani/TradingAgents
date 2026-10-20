@@ -66,7 +66,7 @@ async def create_watchlist(
     """Create a new custom watchlist."""
     wl = WatchlistModel(user_id=current_user.id, name=name.strip())
     _watchlists_db[wl.id] = wl
-    await db_repo.save_watchlist(wl.model_dump())
+    await db_repo.save_watchlist(wl.model_dump(), token=current_user.token)
     return wl
 
 
@@ -95,6 +95,7 @@ async def add_watchlist_item(
                 sort_order=len(wl.items),
             )
         )
+        await db_repo.save_watchlist(wl.model_dump(), token=current_user.token)
     return wl
 
 
@@ -114,4 +115,5 @@ async def remove_watchlist_item(
 
     clean_symbol = symbol.strip().upper()
     wl.items = [item for item in wl.items if item.symbol != clean_symbol]
+    await db_repo.save_watchlist(wl.model_dump(), token=current_user.token)
     return wl

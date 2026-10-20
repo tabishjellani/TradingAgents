@@ -129,3 +129,152 @@ async def test_cross_user_isolation():
         assert res.status_code == 200
         assert res.json()["id"] == "usr-alpha"
         assert res.json()["id"] != "usr-beta"
+
+
+@pytest.mark.asyncio
+async def test_forged_role_in_user_metadata_rejected():
+    """A user attempting to elevate privilege by inserting 'role: admin' into user_metadata is denied."""
+    now = int(time.time())
+    forged_payload = {
+        "sub": "attacker-user",
+        "email": "attacker@example.com",
+        "aud": "authenticated",
+        "user_metadata": {"role": "admin"},  # Client-writable metadata
+        "app_metadata": {"role": "user"},     # Trusted server metadata
+        "iat": now,
+        "exp": now + 3600,
+    }
+    forged_token = jwt.encode(forged_payload, JWT_SECRET, algorithm="HS256")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # User profile should report role as user, not admin
+        res_profile = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": f"Bearer {forged_token}"},
+        )
+        assert res_profile.status_code == 200
+        assert res_profile.json()["role"] == "user"
+
+        # Admin route must be strictly forbidden
+        res_admin = await client.get(
+            "/api/v1/admin/audit-logs",
+            headers={"Authorization": f"Bearer {forged_token}"},
+        )
+        assert res_admin.status_code == 403
+        assert "Administrative privileges required" in res_admin.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_synthetic_token_rejected_in_production_mode(monkeypatch):
+    """Synthetic test-token prefixes are rejected with 401 when environment is production."""
+    monkeypatch.setattr(settings, "environment", "production")
+    test_token = "test-token:dev-user-01:dev@tradingagents.local:admin"
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": f"Bearer {test_token}"},
+        )
+        assert res.status_code == 401
+        assert "Synthetic test tokens are strictly prohibited in production" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_production_requires_jwt_secret(monkeypatch):
+    """In production mode, missing JWT secret raises 500 error preventing unverified fallback."""
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "supabase_jwt_secret", "")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": "Bearer some.arbitrary.token"},
+        )
+        assert res.status_code == 500
+        assert "SUPABASE_JWT_SECRET is required" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_service_role_key_never_default_for_user_crud(monkeypatch):
+    """DatabaseRepository headers must never default to service-role key for user CRUD."""
+    from backend.app.db.repository import db_repo
+
+    monkeypatch.setattr(settings, "supabase_url", "https://example.supabase.co")
+    monkeypatch.setattr(settings, "supabase_anon_key", "anon-public-key")
+    monkeypatch.setattr(settings, "supabase_service_role_key", "secret-service-key")
+    monkeypatch.setattr(settings, "environment", "development")
+
+    # 1. User request with real user token uses user token Bearer
+    user_headers = db_repo._get_supabase_headers(user_token="user.jwt.token", is_service_role=False)
+    assert user_headers["Authorization"] == "Bearer user.jwt.token"
+
+    # 2. User request without token in development uses anon key, never service-role
+    anon_headers = db_repo._get_supabase_headers(user_token=None, is_service_role=False)
+    assert anon_headers["Authorization"] == "Bearer anon-public-key"
+    assert anon_headers["Authorization"] != "Bearer secret-service-key"
+
+    # 3. Explicit service-role call attaches service role key
+    svc_headers = db_repo._get_supabase_headers(user_token=None, is_service_role=True)
+    assert svc_headers["Authorization"] == "Bearer secret-service-key"
+
+
+@pytest.mark.asyncio
+async def test_origin_protection_gateway_secret(monkeypatch):
+    """In production with gateway_shared_secret configured, requests bypassing gateway receive 403."""
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "gateway_shared_secret", "cf-worker-super-secret-gateway-token")
+    token = create_token("usr-12345", "trader@example.com", role="user")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Direct origin request without gateway secret is rejected
+        res_direct = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res_direct.status_code == 403
+        assert "Direct origin access forbidden" in res_direct.json()["detail"]
+
+        # Request with correct gateway secret passes through
+        res_gateway = await client.get(
+            "/api/v1/user/profile",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Gateway-Secret": "cf-worker-super-secret-gateway-token",
+            },
+        )
+        assert res_gateway.status_code == 200
+        assert res_gateway.json()["id"] == "usr-12345"
+
+
+@pytest.mark.asyncio
+async def test_job_manager_restart_recovery():
+    """Interrupted queued or running jobs are transitioned to failed on process restart."""
+    from backend.app.db.repository import db_repo
+    from backend.app.engine.job_manager import job_manager
+
+    # Inject simulated running job into store
+    data = db_repo._read_local_store()
+    data["research_jobs"]["test-interrupted-job"] = {
+        "id": "test-interrupted-job",
+        "user_id": "usr-recovery-test",
+        "symbol": "AAPL",
+        "asset_type": "stock",
+        "trade_date": "2026-10-01",
+        "status": "running",
+        "progress_percent": 50,
+        "current_step": "In flight before crash",
+    }
+    db_repo._write_local_store(data)
+
+    # Trigger restart recovery
+    await job_manager.recover_active_jobs()
+
+    # Verify job status was marked failed with clear explanation
+    recovered = db_repo._read_local_store()["research_jobs"]["test-interrupted-job"]
+    assert recovered["status"] == "failed"
+    assert "Process restarted" in recovered["error_message"]
+

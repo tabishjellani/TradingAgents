@@ -29,6 +29,7 @@ class PaperOrderRequest(BaseModel):
     limit_price: float | None = None
     slippage_bps: int = 5  # 5 basis points (0.05%) default slippage
     fee_bps: int = 0  # 0 basis points default (free commission)
+    idempotency_key: str | None = None
 
 
 class PaperOrderRecord(BaseModel):
@@ -46,6 +47,7 @@ class PaperOrderRecord(BaseModel):
     status: Literal["filled", "rejected"]
     executed_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     rejection_reason: str | None = None
+    idempotency_key: str | None = None
 
 
 class PositionState(BaseModel):
@@ -86,6 +88,13 @@ class PaperTradingEngine:
     ) -> PaperOrderRecord:
         """Execute a simulated order against the portfolio using Decimal arithmetic."""
         sym = order_req.symbol.strip().upper()
+
+        # Idempotency deduplication: return existing order if key matches
+        if order_req.idempotency_key:
+            for existing_order in portfolio.orders:
+                if existing_order.idempotency_key == order_req.idempotency_key:
+                    return existing_order
+
         raw_price = _d(current_market_price)
         qty = _d(order_req.quantity)
         cash = _d(portfolio.current_cash)
@@ -191,6 +200,7 @@ class PaperTradingEngine:
             fees=float(fee),
             total_cost=float(total_cost),
             status="filled",
+            idempotency_key=order_req.idempotency_key,
         )
         portfolio.orders.insert(0, fill_record)
         return fill_record

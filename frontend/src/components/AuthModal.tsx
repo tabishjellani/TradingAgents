@@ -27,7 +27,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
     try {
       if (!isSupabaseConfigured) {
-        // Offline / Local development session
+        if (import.meta.env.PROD) {
+          throw new Error('Supabase configuration is missing in this production deployment. Please configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
+        }
+
+        // Offline / Local development session only
         if (email && password.length >= 6) {
           const role = email.includes('admin') ? 'admin' : 'user';
           const mockToken = `test-token:${email.split('@')[0]}:${email}:${role}`;

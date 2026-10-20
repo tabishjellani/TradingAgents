@@ -114,8 +114,10 @@ async def run_backtest_sweep(
             calc_hit_rate = round(hits / total_evaluations, 4)
             calc_mean_alpha = round(sum(alphas) / total_evaluations, 4)
             notes_str = (
-                f"Historical evaluation across {total_evaluations} periods vs {benchmark} benchmark. "
-                f"Computed from real point-in-time closing prices."
+                f"Forward-return benchmark sweep across {total_evaluations} periods vs {benchmark} using real historical closing prices. "
+                "Evaluates point-in-time relative excess alpha over the date grid. "
+                "Limitation notice: This calculation measures interval price performance and forward-return alpha; "
+                "it is not a full-fidelity strategy backtest with trade signal generation, position sizing, stop-losses, slippage, and execution costs."
             )
         else:
             calc_hit_rate = 0.0

@@ -18,6 +18,7 @@ class UserClaims(BaseModel):
     id: str
     email: str
     role: str = "user"
+    token: str = ""
 
 
 def decode_token(token: str) -> UserClaims:
@@ -42,7 +43,7 @@ def decode_token(token: str) -> UserClaims:
             )
         parts = token.split(":")
         if len(parts) >= 4:
-            return UserClaims(id=parts[1], email=parts[2], role=parts[3])
+            return UserClaims(id=parts[1], email=parts[2], role=parts[3], token=token)
 
     # 2. Supabase JWT Secret Verification
     if settings.supabase_jwt_secret:
@@ -55,9 +56,10 @@ def decode_token(token: str) -> UserClaims:
             )
             user_id = payload.get("sub")
             email = payload.get("email", "")
-            # Check user role from app_metadata or payload
+            # Check user role strictly from app_metadata (never from user_metadata)
             app_meta = payload.get("app_metadata", {})
-            role = app_meta.get("role") or payload.get("role", "user")
+            assigned_role = app_meta.get("role", "user")
+            role = assigned_role if assigned_role in ("user", "operator", "admin") else "user"
 
             if not user_id:
                 raise HTTPException(
@@ -65,7 +67,7 @@ def decode_token(token: str) -> UserClaims:
                     detail="Invalid token claims: missing subject.",
                 )
 
-            return UserClaims(id=user_id, email=email, role=role)
+            return UserClaims(id=user_id, email=email, role=role, token=token)
         except jwt.ExpiredSignatureError as err:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -77,13 +79,22 @@ def decode_token(token: str) -> UserClaims:
                 detail="Invalid authentication token.",
             ) from err
 
-    # 3. Unverified decode fallback if JWT secret is not configured in local environment
+    # In production, unverified decoding without secret signature check is strictly forbidden
+    if settings.environment == "production":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server configuration error: SUPABASE_JWT_SECRET is required to verify authentication tokens in production.",
+        )
+
+    # 3. Unverified decode fallback ONLY in local offline development if JWT secret is not configured
     try:
         unverified = jwt.decode(token, options={"verify_signature": False})
         user_id = unverified.get("sub") or "local-dev-user"
         email = unverified.get("email") or "dev@local.test"
-        role = unverified.get("role", "user")
-        return UserClaims(id=user_id, email=email, role=role)
+        app_meta = unverified.get("app_metadata", {})
+        assigned_role = app_meta.get("role", "user")
+        role = assigned_role if assigned_role in ("user", "operator", "admin") else "user"
+        return UserClaims(id=user_id, email=email, role=role, token=token)
     except Exception as err:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

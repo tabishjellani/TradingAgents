@@ -3,6 +3,7 @@
 Exposes REST and SSE endpoints for the TradingAgents PWA frontend.
 """
 
+import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -21,7 +22,9 @@ from backend.app.api.v1.trading import router as trading_router
 from backend.app.api.v1.watchlist import router as watchlist_router
 from backend.app.auth import UserClaims, get_current_user
 from backend.app.config import settings
+from backend.app.engine.job_manager import job_manager
 
+logger = logging.getLogger(__name__)
 _START_TIME = datetime.now(UTC)
 
 
@@ -30,6 +33,8 @@ async def lifespan(app: FastAPI):
     """Lifecycle startup and shutdown management."""
     # Ensure local data directory exists
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    # Recover any orphaned active jobs after process restart
+    await job_manager.recover_active_jobs()
     yield
 
 
@@ -39,6 +44,24 @@ app = FastAPI(
     description="Full-stack AI financial research, backtesting, and paper trading framework.",
     lifespan=lifespan,
 )
+
+# Origin protection middleware: ensures direct public tunnel cannot bypass Cloudflare Worker
+@app.middleware("http")
+async def origin_gateway_protection_middleware(request: Request, call_next):
+    if (
+        settings.environment == "production"
+        and settings.gateway_shared_secret
+        and request.url.path not in ("/health", "/api/v1/health")
+    ):
+        secret = request.headers.get("X-Gateway-Secret")
+        if not secret or secret != settings.gateway_shared_secret:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "Direct origin access forbidden. Requests must traverse the verified Cloudflare Worker Gateway.",
+                },
+            )
+    return await call_next(request)
 
 # Configure CORS
 app.add_middleware(
@@ -115,11 +138,12 @@ async def get_user_profile(
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     """Structured JSON error response for unhandled server exceptions."""
+    logger.exception("Unhandled server exception at %s: %s", request.url.path, exc)
     return JSONResponse(
         status_code=500,
         content={
             "error": "Internal Server Error",
-            "message": str(exc) if settings.debug else "An unexpected error occurred.",
+            "message": str(exc) if settings.debug else "An unexpected error occurred. Please contact support.",
             "path": request.url.path,
         },
     )

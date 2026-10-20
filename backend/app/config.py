@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # Server binding
     host: str = "127.0.0.1"
     port: int = 8000
+    gateway_shared_secret: str = ""
 
     # CORS configuration
     cors_origins: list[str] = [
@@ -58,5 +59,15 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @property
+    def is_production(self) -> bool:
+        return self.environment.lower() == "production"
+
+    def model_post_init(self, __context):
+        if self.is_production:
+            self.debug = False
+
 
 settings = Settings()
+
+

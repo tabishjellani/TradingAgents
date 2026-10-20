@@ -95,8 +95,8 @@ async def submit_paper_order(
             detail=fill.rejection_reason or "Order rejected.",
         )
 
-    await db_repo.save_portfolio(p.model_dump())
-    await db_repo.save_order(fill.model_dump())
+    await db_repo.save_portfolio(p.model_dump(), token=current_user.token)
+    await db_repo.save_order(fill.model_dump(), token=current_user.token)
 
     return fill
 
@@ -109,5 +109,8 @@ async def list_portfolio_orders(
     """Retrieve full trade ledger history for this portfolio."""
     p = _portfolios_db.get(portfolio_id)
     if not p or p.user_id != current_user.id:
-        p = _get_or_create_portfolio(current_user.id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Portfolio not found.",
+        )
     return p.orders

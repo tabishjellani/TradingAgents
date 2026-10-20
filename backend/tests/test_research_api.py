@@ -79,8 +79,14 @@ async def test_cross_user_job_isolation():
 
 
 @pytest.mark.asyncio
-async def test_cancel_own_job():
+async def test_cancel_own_job(monkeypatch):
     """Verify user can cancel their own active or queued job."""
+    import time
+
+    monkeypatch.setattr(
+        "backend.app.engine.job_manager.execute_research_run",
+        lambda *args, **kwargs: time.sleep(2),
+    )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         submit_res = await client.post(

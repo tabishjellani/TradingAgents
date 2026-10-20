@@ -47,7 +47,7 @@ async def create_user_alert(
         cooldown_minutes=req.cooldown_minutes,
     )
     saved = alert_evaluator.add_rule(rule)
-    await db_repo.save_alert_rule(saved.model_dump())
+    await db_repo.save_alert_rule(saved.model_dump(), token=current_user.token)
     return saved
 
 
@@ -63,7 +63,7 @@ async def delete_user_alert(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Alert rule not found.",
         )
-    await db_repo.delete_alert_rule(alert_id, current_user.id)
+    await db_repo.delete_alert_rule(alert_id, current_user.id, token=current_user.token)
     return {"status": "deleted", "alert_id": alert_id}
 
 

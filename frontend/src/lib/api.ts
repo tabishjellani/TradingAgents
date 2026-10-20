@@ -5,7 +5,11 @@ const API_BASE = '/api/v1';
 // Token storage: checks localStorage first, defaults to offline dev admin token if unauthenticated
 const STORAGE_KEY = 'tradingagents_auth_token';
 
-let inMemoryToken: string | null = localStorage.getItem(STORAGE_KEY) || 'test-token:dev-user-01:dev@tradingagents.local:admin';
+let inMemoryToken: string | null = localStorage.getItem(STORAGE_KEY);
+if (!inMemoryToken && !import.meta.env.PROD) {
+  // Local offline development convenience only; impossible in production builds
+  inMemoryToken = 'test-token:dev-user-01:dev@tradingagents.local:admin';
+}
 
 export function getAuthToken(): string | null {
   return inMemoryToken;

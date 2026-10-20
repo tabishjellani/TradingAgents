@@ -18,20 +18,26 @@ export interface Env {
   PYTHON_BACKEND_URL: string;
   SUPABASE_URL: string;
   SUPABASE_ANON_KEY: string;
+  GATEWAY_SHARED_SECRET?: string;
+  ENVIRONMENT?: string;
   RATE_LIMIT_PER_MINUTE?: number;
 }
 
 // In-memory token-bucket / sliding window for edge rate limiting
 const ipRateLimits = new Map<string, { count: number; resetTime: number }>();
 
-function isAllowedOrigin(origin: string | null): boolean {
+function isAllowedOrigin(origin: string | null, env?: Env): boolean {
   if (!origin) return true;
   try {
     const u = new URL(origin);
     const host = u.hostname;
+    // Disallow localhost in strict production environments
+    if (env?.ENVIRONMENT === "production") {
+      if (host === "localhost" || host === "127.0.0.1") return false;
+    } else {
+      if (host === "localhost" || host === "127.0.0.1") return true;
+    }
     return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
       host.endsWith(".pages.dev") ||
       host.endsWith(".workers.dev") ||
       host.endsWith(".trycloudflare.com")
@@ -102,6 +108,17 @@ export default {
 
     // 3. API Proxy to Python research engine
     if (url.pathname.startsWith("/api/")) {
+      // Request size guard: maximum 10MB
+      const contentLength = request.headers.get("content-length");
+      if (contentLength && parseInt(contentLength, 10) > 10 * 1024 * 1024) {
+        const res = new Response(
+          JSON.stringify({ detail: "Payload too large. Maximum request body size is 10MB." }),
+          { status: 413, headers: { "Content-Type": "application/json" } }
+        );
+        applySecurityHeaders(res.headers, origin);
+        return res;
+      }
+
       // Basic IP Rate limiting
       const clientIp = request.headers.get("CF-Connecting-IP") || "127.0.0.1";
       const now = Date.now();
@@ -123,12 +140,18 @@ export default {
         }
       }
 
-      // Defense-in-depth: Strip any client-supplied spoofed identity headers
+      // Defense-in-depth: Strip client-supplied spoofed identity and gateway secret headers
       const forwardHeaders = new Headers(request.headers);
       forwardHeaders.delete("x-user-id");
       forwardHeaders.delete("x-user-role");
       forwardHeaders.delete("x-user-email");
       forwardHeaders.delete("x-admin-override");
+      forwardHeaders.delete("x-gateway-secret");
+
+      // Inject edge-to-origin mutual gateway authentication secret
+      if (env.GATEWAY_SHARED_SECRET) {
+        forwardHeaders.set("X-Gateway-Secret", env.GATEWAY_SHARED_SECRET);
+      }
 
       // Add edge tracking headers
       forwardHeaders.set("X-Forwarded-Host", url.host);
@@ -157,15 +180,19 @@ export default {
         return newResponse;
       } catch (err: unknown) {
         clearTimeout(timeoutId);
+        const isProd = env.ENVIRONMENT === "production";
         const message = err instanceof Error ? err.message : String(err);
-        const res = new Response(
-          JSON.stringify({
-            detail: "Gateway error: unable to connect to Python research engine.",
-            error: message,
-            hint: "Ensure the local Windows FastAPI backend is running and the Cloudflare Tunnel is connected.",
-          }),
-          { status: 502, headers: { "Content-Type": "application/json" } }
-        );
+        const errorBody = isProd
+          ? { detail: "Gateway error: unable to reach Python research engine origin. Please try again shortly." }
+          : {
+              detail: "Gateway error: unable to connect to Python research engine.",
+              error: message,
+              hint: "Ensure the local Windows FastAPI backend is running and the Cloudflare Tunnel is connected.",
+            };
+        const res = new Response(JSON.stringify(errorBody), {
+          status: 502,
+          headers: { "Content-Type": "application/json" },
+        });
         applySecurityHeaders(res.headers, origin);
         return res;
       }
