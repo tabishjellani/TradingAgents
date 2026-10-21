@@ -22,18 +22,26 @@ ALTER TABLE public.audit_events ENABLE ROW LEVEL SECURITY;
 -- Users can view their own profile; admins can view all profiles
 CREATE POLICY "Users can view own profile or admins view all"
 ON public.profiles FOR SELECT
-USING (auth.uid() = id OR EXISTS (
-    SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'
-));
+USING (
+    auth.uid() = id
+    OR (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'
+);
 
--- Users cannot change their own role or daily quota; only non-privileged updates allowed
+-- Users can insert their own profile
+CREATE POLICY "Users can insert own profile"
+ON public.profiles FOR INSERT
+WITH CHECK (auth.uid() = id);
+
+-- Users cannot elevate their own role or daily quota
 CREATE POLICY "Users can update own profile non-privileged fields"
 ON public.profiles FOR UPDATE
 USING (auth.uid() = id)
 WITH CHECK (
     auth.uid() = id
-    AND role = (SELECT role FROM public.profiles WHERE id = auth.uid())
-    AND daily_job_quota = (SELECT daily_job_quota FROM public.profiles WHERE id = auth.uid())
+    AND (
+        (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'
+        OR (role = 'user' AND daily_job_quota <= 20)
+    )
 );
 
 -- 3. Watchlists Policies
@@ -132,9 +140,9 @@ WITH CHECK (auth.uid() = user_id);
 -- 14. Audit Events Policies (Admins can view, authenticated can log events)
 CREATE POLICY "Admins can view audit events"
 ON public.audit_events FOR SELECT
-USING (EXISTS (
-    SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'
-));
+USING (
+    (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'
+);
 
 CREATE POLICY "Authenticated users and service can insert audit events"
 ON public.audit_events FOR INSERT

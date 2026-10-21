@@ -1,6 +1,7 @@
 import type { MarketQuote, ResearchJob, SystemHealth, PaperPosition, PaperOrder, AlertRule } from '../types';
 
-const API_BASE = '/api/v1';
+const envBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim().replace(/\/+$/, '');
+const API_BASE = envBase ? (envBase.endsWith('/api/v1') ? envBase : `${envBase}/api/v1`) : '/api/v1';
 
 // Token storage: checks localStorage first, defaults to offline dev admin token if unauthenticated
 const STORAGE_KEY = 'tradingagents_auth_token';

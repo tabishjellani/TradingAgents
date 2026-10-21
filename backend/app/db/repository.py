@@ -74,7 +74,7 @@ class DatabaseRepository:
         headers = {
             "apikey": anon_key,
             "Content-Type": "application/json",
-            "Prefer": "return=representation",
+            "Prefer": "return=representation,resolution=merge-duplicates",
         }
 
         if user_token and not user_token.startswith("test-token:"):
@@ -191,6 +191,23 @@ class DatabaseRepository:
                     )
                     if res.status_code not in (200, 201):
                         self._handle_error("save_portfolio", f"HTTP {res.status_code}: {res.text}")
+
+                    # Also persist positions
+                    positions = portfolio.get("positions", {})
+                    positions_list = list(positions.values()) if isinstance(positions, dict) else (positions or [])
+                    for pos in positions_list:
+                        pos_payload = {
+                            "portfolio_id": portfolio["id"],
+                            "symbol": pos["symbol"],
+                            "asset_type": pos.get("asset_type", "stock"),
+                            "quantity": pos["quantity"],
+                            "average_price": pos.get("average_entry_price", pos.get("average_price", 0.0)),
+                        }
+                        await client.post(
+                            f"{settings.supabase_url}/rest/v1/positions",
+                            json=pos_payload,
+                            headers=self._get_supabase_headers(token),
+                        )
             except Exception as exc:
                 self._handle_error("save_portfolio", exc)
 
@@ -318,7 +335,6 @@ class DatabaseRepository:
         if self.is_supabase_enabled:
             try:
                 payload = {
-                    "id": report.get("id"),
                     "job_id": report["job_id"],
                     "user_id": report["user_id"],
                     "symbol": report["symbol"],
@@ -326,6 +342,8 @@ class DatabaseRepository:
                     "markdown_content": report.get("markdown_content", ""),
                     "html_content": report.get("html_content"),
                 }
+                if report.get("id"):
+                    payload["id"] = report["id"]
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     res = await client.post(
                         f"{settings.supabase_url}/rest/v1/research_reports",

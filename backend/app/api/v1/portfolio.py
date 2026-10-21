@@ -1,5 +1,4 @@
-"""Paper Portfolio & Order Ledger API endpoints."""
-
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -18,6 +17,13 @@ router = APIRouter(prefix="/api/v1/portfolios", tags=["Portfolios"])
 
 # In-memory runtime cache synchronized with db_repo
 _portfolios_db: dict[str, PortfolioState] = {}
+_portfolio_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_portfolio_lock(portfolio_id: str) -> asyncio.Lock:
+    if portfolio_id not in _portfolio_locks:
+        _portfolio_locks[portfolio_id] = asyncio.Lock()
+    return _portfolio_locks[portfolio_id]
 
 
 def _get_or_create_portfolio(user_id: str) -> PortfolioState:
@@ -81,24 +87,26 @@ async def submit_paper_order(
     except Exception:
         pass
 
-    # Execute order via quantitative paper engine
-    fill = PaperTradingEngine.execute_order(
-        portfolio=p,
-        order_req=order_req,
-        current_market_price=price,
-        asset_type="crypto" if is_crypto else "stock",
-    )
-
-    if fill.status == "rejected":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=fill.rejection_reason or "Order rejected.",
+    # Execute order atomically via quantitative paper engine under portfolio lock
+    lock = _get_portfolio_lock(p.id)
+    async with lock:
+        fill = PaperTradingEngine.execute_order(
+            portfolio=p,
+            order_req=order_req,
+            current_market_price=price,
+            asset_type="crypto" if is_crypto else "stock",
         )
 
-    await db_repo.save_portfolio(p.model_dump(), token=current_user.token)
-    await db_repo.save_order(fill.model_dump(), token=current_user.token)
+        if fill.status == "rejected":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=fill.rejection_reason or "Order rejected.",
+            )
 
-    return fill
+        await db_repo.save_portfolio(p.model_dump(), token=current_user.token)
+        await db_repo.save_order(fill.model_dump(), token=current_user.token)
+
+        return fill
 
 
 @router.get("/{portfolio_id}/orders", response_model=list[PaperOrderRecord])

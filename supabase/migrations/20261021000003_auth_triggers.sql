@@ -26,7 +26,7 @@ BEGIN
 
     RETURN new;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
 -- Trigger firing on every new auth user signup
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;

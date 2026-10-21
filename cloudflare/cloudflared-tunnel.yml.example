@@ -1,0 +1,28 @@
+# Cloudflare Named Tunnel Configuration Example for TradingAgents
+# Usage:
+# 1. Login with cloudflared:
+#    cloudflared tunnel login
+# 2. Create the named tunnel:
+#    cloudflared tunnel create tradingagents-backend
+# 3. Route DNS hostname to tunnel:
+#    cloudflared tunnel route dns tradingagents-backend origin-backend.yourdomain.com
+# 4. Copy this file to config.yml (or %USERPROFILE%\.cloudflared\config.yml)
+# 5. Run the tunnel:
+#    cloudflared tunnel run tradingagents-backend
+
+tunnel: YOUR_TUNNEL_UUID_HERE
+credentials-file: C:\Users\YourUser\.cloudflared\YOUR_TUNNEL_UUID_HERE.json
+
+# Ingress rules routing incoming gateway traffic to local FastAPI
+ingress:
+  # Route traffic intended for backend origin to local port 8000
+  - hostname: origin-backend.yourdomain.com
+    service: http://127.0.0.1:8000
+    originRequest:
+      connectTimeout: 30s
+      noTLSVerify: false
+      tcpKeepAlive: 30s
+      keepAliveConnections: 100
+
+  # Catch-all rule (required by cloudflared)
+  - service: http_status:404

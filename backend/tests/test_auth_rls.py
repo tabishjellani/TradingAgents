@@ -249,6 +249,118 @@ async def test_origin_protection_gateway_secret(monkeypatch):
         assert res_gateway.status_code == 200
         assert res_gateway.json()["id"] == "usr-12345"
 
+        # Request with incorrect gateway secret must be rejected with 403
+        res_tampered_secret = await client.get(
+            "/api/v1/user/profile",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Gateway-Secret": "malicious-attacker-forged-secret",
+            },
+        )
+        assert res_tampered_secret.status_code == 403
+        assert "Direct origin access forbidden" in res_tampered_secret.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_wrong_secret_signature_rejected():
+    """Tokens signed with a different key than SUPABASE_JWT_SECRET are strictly rejected."""
+    wrong_key = "wrong-secret-key-that-does-not-match!"
+    now = int(time.time())
+    payload = {
+        "sub": "usr-attacker",
+        "email": "attacker@example.com",
+        "aud": "authenticated",
+        "role": "authenticated",
+        "app_metadata": {"role": "user"},
+        "iat": now,
+        "exp": now + 3600,
+    }
+    forged_token = jwt.encode(payload, wrong_key, algorithm="HS256")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": f"Bearer {forged_token}"},
+        )
+        assert res.status_code == 401
+        assert "Invalid authentication token" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_alg_none_token_rejected():
+    """Unsigned tokens using algorithm 'none' are rejected."""
+    now = int(time.time())
+    payload = {
+        "sub": "usr-attacker",
+        "email": "attacker@example.com",
+        "aud": "authenticated",
+        "role": "authenticated",
+        "app_metadata": {"role": "admin"},
+        "iat": now,
+        "exp": now + 3600,
+    }
+    none_token = jwt.encode(payload, "", algorithm="none")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": f"Bearer {none_token}"},
+        )
+        assert res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_wrong_audience_rejected():
+    """Tokens with an audience other than 'authenticated' are rejected."""
+    now = int(time.time())
+    payload = {
+        "sub": "usr-12345",
+        "email": "trader@example.com",
+        "aud": "anon",  # Wrong audience for authenticated routes
+        "role": "anon",
+        "app_metadata": {"role": "user"},
+        "iat": now,
+        "exp": now + 3600,
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_invalid_issuer_rejected(monkeypatch):
+    """Tokens with an issuer not matching configured Supabase auth URL are rejected."""
+    monkeypatch.setattr(settings, "supabase_url", "https://valid-project.supabase.co")
+    now = int(time.time())
+    payload = {
+        "sub": "usr-12345",
+        "email": "trader@example.com",
+        "iss": "https://malicious-fake-supabase.attacker.com/auth/v1",
+        "aud": "authenticated",
+        "role": "authenticated",
+        "app_metadata": {"role": "user"},
+        "iat": now,
+        "exp": now + 3600,
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 401
+        assert "Invalid authentication token issuer" in res.json()["detail"]
+
 
 @pytest.mark.asyncio
 async def test_job_manager_restart_recovery():

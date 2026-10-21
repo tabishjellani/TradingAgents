@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS public.orders (
     price NUMERIC(18, 4) NOT NULL CHECK (price >= 0),
     status TEXT NOT NULL CHECK (status IN ('pending', 'filled', 'cancelled', 'rejected')),
     fees NUMERIC(18, 4) NOT NULL DEFAULT 0.0000 CHECK (fees >= 0),
-    idempotency_key UUID UNIQUE,
+    idempotency_key TEXT UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     executed_at TIMESTAMPTZ
 );
@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS public.research_reports (
     job_id UUID NOT NULL REFERENCES public.research_jobs(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     symbol TEXT NOT NULL,
-    rating TEXT NOT NULL CHECK (rating IN ('Buy', 'Overweight', 'Hold', 'Underweight', 'Sell', 'REVIEW')),
+    rating TEXT NOT NULL CHECK (rating IN ('Buy', 'Strong Buy', 'Overweight', 'Hold', 'Neutral', 'Underweight', 'Sell', 'Strong Sell', 'REVIEW')),
     markdown_content TEXT NOT NULL,
     html_content TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())

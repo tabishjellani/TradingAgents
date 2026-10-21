@@ -48,6 +48,23 @@ def decode_token(token: str) -> UserClaims:
     # 2. Supabase JWT Secret Verification
     if settings.supabase_jwt_secret:
         try:
+            # Verify issuer if token contains iss and supabase_url is configured
+            if settings.supabase_url:
+                expected_iss = f"{settings.supabase_url.rstrip('/')}/auth/v1"
+                try:
+                    unverified_claims = jwt.decode(token, options={"verify_signature": False})
+                    token_iss = unverified_claims.get("iss")
+                    if token_iss and token_iss != expected_iss:
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid authentication token issuer.",
+                            headers={"WWW-Authenticate": "Bearer"},
+                        )
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass
+
             payload = jwt.decode(
                 token,
                 settings.supabase_jwt_secret,
@@ -65,6 +82,7 @@ def decode_token(token: str) -> UserClaims:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid token claims: missing subject.",
+                    headers={"WWW-Authenticate": "Bearer"},
                 )
 
             return UserClaims(id=user_id, email=email, role=role, token=token)
@@ -72,11 +90,13 @@ def decode_token(token: str) -> UserClaims:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication token has expired.",
+                headers={"WWW-Authenticate": "Bearer"},
             ) from err
         except jwt.InvalidTokenError as err:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication token.",
+                headers={"WWW-Authenticate": "Bearer"},
             ) from err
 
     # In production, unverified decoding without secret signature check is strictly forbidden
