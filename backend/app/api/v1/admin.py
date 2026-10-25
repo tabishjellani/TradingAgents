@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from backend.app.auth import UserClaims, require_admin
 from backend.app.config import settings
 from backend.app.core.secrets_vault import SUPPORTED_PROVIDERS, vault
+from backend.app.db.repository import db_repo
 
 router = APIRouter(prefix="/api/v1/admin", tags=["Administration"])
 
@@ -116,6 +117,13 @@ async def update_global_quota(
 ) -> dict[str, Any]:
     """Update global daily job quota."""
     settings.user_daily_job_quota = req.daily_job_quota
+    await db_repo.record_audit_event(
+        actor_id=admin.id,
+        action="global_quota_updated",
+        resource_type="system_quota",
+        resource_id="daily_job_quota",
+        details={"new_daily_job_quota": req.daily_job_quota},
+    )
     return {
         "updated_by": admin.email,
         "new_daily_job_quota": settings.user_daily_job_quota,
@@ -127,21 +135,29 @@ async def get_audit_trail(
     admin: Annotated[UserClaims, Depends(require_admin)],
 ) -> list[dict[str, Any]]:
     """Retrieve append-only audit trail."""
+    events = await db_repo.get_audit_events(limit=50, token=admin.token)
+    if not events:
+        return [
+            {
+                "id": "aud-init",
+                "action": "SYSTEM_STARTUP",
+                "actor": "System",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "status": "SUCCESS",
+            }
+        ]
     return [
         {
-            "id": "aud-1",
-            "action": "SYSTEM_STARTUP",
-            "actor": "System",
-            "timestamp": datetime.now(UTC).isoformat(),
+            "id": e.get("id"),
+            "action": e.get("action"),
+            "actor": e.get("actor_id") or "System",
+            "resource_type": e.get("resource_type"),
+            "resource_id": e.get("resource_id"),
+            "timestamp": e.get("created_at"),
+            "details": e.get("details", {}),
             "status": "SUCCESS",
-        },
-        {
-            "id": "aud-2",
-            "action": "ADMIN_ACCESS_VERIFIED",
-            "actor": admin.email,
-            "timestamp": datetime.now(UTC).isoformat(),
-            "status": "SUCCESS",
-        },
+        }
+        for e in events
     ]
 
 
@@ -200,6 +216,13 @@ async def set_ai_provider_key(
     try:
         vault.set_provider_key(p_lower, req.api_key)
         st = vault.get_provider_status(p_lower)
+        await db_repo.record_audit_event(
+            actor_id=admin.id,
+            action="ai_key_saved",
+            resource_type="secrets_vault",
+            resource_id=p_lower,
+            details={"provider": p_lower, "source": st["source"]},
+        )
         return {
             "success": True,
             "provider": p_lower,
@@ -228,6 +251,13 @@ async def delete_ai_provider_key(
         )
 
     removed = vault.remove_provider_key(p_lower)
+    await db_repo.record_audit_event(
+        actor_id=admin.id,
+        action="ai_key_deleted",
+        resource_type="secrets_vault",
+        resource_id=p_lower,
+        details={"provider": p_lower, "removed": removed},
+    )
     return {
         "success": True,
         "provider": p_lower,
@@ -268,6 +298,18 @@ async def update_ai_config(
     settings.default_ai_provider = p_lower
     settings.default_quick_model = req.default_quick_model
     settings.default_deep_model = req.default_deep_model
+
+    await db_repo.record_audit_event(
+        actor_id=admin.id,
+        action="ai_config_updated",
+        resource_type="model_config",
+        resource_id=p_lower,
+        details={
+            "provider": p_lower,
+            "quick_model": req.default_quick_model,
+            "deep_model": req.default_deep_model,
+        },
+    )
 
     return {
         "success": True,

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +49,8 @@ class DatabaseRepository:
                 "research_reports": {},
                 "alert_rules": {},
                 "backtest_runs": {},
+                "audit_events": {},
+                "profiles": {},
             }
             LOCAL_STORE_PATH.write_text(json.dumps(initial_data, indent=2), encoding="utf-8")
 
@@ -451,6 +455,137 @@ class DatabaseRepository:
             self._write_local_store(data)
             return True
         return False
+
+    # -------------------------------------------------------------------------
+    # Audit Events (Append-only security log; service_role write path)
+    # -------------------------------------------------------------------------
+    async def record_audit_event(
+        self,
+        actor_id: str | None,
+        action: str,
+        resource_type: str,
+        resource_id: str | None = None,
+        ip_address: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Record an immutable, server-side audit event.
+
+        Actor identity is derived strictly from server-side context; never trust
+        a client-supplied actor identifier. In Supabase mode, writes use the
+        service-role key because client writes to public.audit_events are revoked.
+        """
+        event_id = str(uuid.uuid4())
+        event_record = {
+            "id": event_id,
+            "actor_id": actor_id,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "ip_address": ip_address,
+            "details": details or {},
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+
+        if self.is_supabase_enabled:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    res = await client.post(
+                        f"{settings.supabase_url}/rest/v1/audit_events",
+                        json=event_record,
+                        headers=self._get_supabase_headers(is_service_role=True),
+                    )
+                    if res.status_code not in (200, 201):
+                        self._handle_error("record_audit_event", f"HTTP {res.status_code}: {res.text}")
+                    return event_record
+            except Exception as exc:
+                self._handle_error("record_audit_event", exc)
+
+        data = self._read_local_store()
+        if "audit_events" not in data:
+            data["audit_events"] = {}
+        data["audit_events"][event_id] = event_record
+        self._write_local_store(data)
+        return event_record
+
+    async def get_audit_events(self, limit: int = 50, token: str | None = None) -> list[dict[str, Any]]:
+        """Retrieve audit events. Admins only; passes user JWT to PostgREST."""
+        if self.is_supabase_enabled:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    res = await client.get(
+                        f"{settings.supabase_url}/rest/v1/audit_events?order=created_at.desc&limit={limit}",
+                        headers=self._get_supabase_headers(user_token=token),
+                    )
+                    if res.status_code == 200:
+                        return res.json()
+                    self._handle_error("get_audit_events", f"HTTP {res.status_code}: {res.text}")
+            except Exception as exc:
+                self._handle_error("get_audit_events", exc)
+
+        data = self._read_local_store()
+        events = list(data.get("audit_events", {}).values())
+        events.sort(key=lambda e: e.get("created_at", ""), reverse=True)
+        return events[:limit]
+
+    # -------------------------------------------------------------------------
+    # Profiles (Privilege-isolated profile management)
+    # -------------------------------------------------------------------------
+    async def get_profile(self, user_id: str, token: str | None = None) -> dict[str, Any] | None:
+        """Retrieve user profile respecting RLS."""
+        if self.is_supabase_enabled:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    res = await client.get(
+                        f"{settings.supabase_url}/rest/v1/profiles?id=eq.{user_id}",
+                        headers=self._get_supabase_headers(user_token=token),
+                    )
+                    if res.status_code == 200 and res.json():
+                        return res.json()[0]
+                    if res.status_code not in (200, 404):
+                        self._handle_error("get_profile", f"HTTP {res.status_code}: {res.text}")
+            except Exception as exc:
+                self._handle_error("get_profile", exc)
+
+        data = self._read_local_store()
+        return data.get("profiles", {}).get(user_id)
+
+    async def create_profile(
+        self,
+        user_id: str,
+        email: str,
+        role: str = "user",
+        daily_job_quota: int = 20,
+        is_service_role: bool = False,
+    ) -> dict[str, Any]:
+        """Create a user profile. In production, this requires service_role or trigger."""
+        profile_data = {
+            "id": user_id,
+            "email": email,
+            "role": role,
+            "daily_job_quota": daily_job_quota,
+            "created_at": datetime.now(UTC).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        if self.is_supabase_enabled:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    res = await client.post(
+                        f"{settings.supabase_url}/rest/v1/profiles",
+                        json=profile_data,
+                        headers=self._get_supabase_headers(is_service_role=is_service_role),
+                    )
+                    if res.status_code not in (200, 201):
+                        self._handle_error("create_profile", f"HTTP {res.status_code}: {res.text}")
+                    return profile_data
+            except Exception as exc:
+                self._handle_error("create_profile", exc)
+
+        data = self._read_local_store()
+        if "profiles" not in data:
+            data["profiles"] = {}
+        data["profiles"][user_id] = profile_data
+        self._write_local_store(data)
+        return profile_data
 
 
 db_repo = DatabaseRepository()

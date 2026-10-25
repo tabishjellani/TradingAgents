@@ -1,6 +1,6 @@
 """Supabase JWT Verification & Role-Based Access Control (RBAC)."""
 
-from typing import Annotated
+from typing import Annotated, Any
 
 import jwt
 from fastapi import Depends, HTTPException, Security, status
@@ -44,14 +44,7 @@ def decode_token(token: str) -> UserClaims:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # 1. Enforce JWT secret requirement in production mode
-    if settings.environment == "production" and not settings.supabase_jwt_secret:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server configuration error: SUPABASE_JWT_SECRET is required to verify authentication tokens in production.",
-        )
-
-    # 2. Support deterministic test mock tokens (only allowed during offline tests and non-production development)
+    # 1. Support deterministic test mock tokens (only allowed during offline tests and non-production development)
     if token.startswith("test-token:"):
         if settings.environment == "production":
             raise HTTPException(
@@ -63,7 +56,20 @@ def decode_token(token: str) -> UserClaims:
         if len(parts) >= 4:
             return UserClaims(id=parts[1], email=parts[2], role=parts[3], token=token)
 
-    # Inspect token header for algorithm validation
+    # 2. Enforce configuration requirements in production mode
+    if settings.environment == "production":
+        if not settings.supabase_jwt_secret:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Server configuration error: SUPABASE_JWT_SECRET is required to verify authentication tokens in production.",
+            )
+        if not settings.supabase_url:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Server configuration error: SUPABASE_URL is required to verify authentication token issuer in production.",
+            )
+
+    # 3. Inspect token header for algorithm validation
     try:
         header = jwt.get_unverified_header(token)
     except Exception as err:
@@ -81,13 +87,23 @@ def decode_token(token: str) -> UserClaims:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # 2. Issuer check if token contains iss and supabase_url is configured
-    if settings.supabase_url:
-        expected_iss = f"{settings.supabase_url.rstrip('/')}/auth/v1"
+
+    # 3. Determine expected issuer and required claims
+    expected_iss = f"{settings.supabase_url.rstrip('/')}/auth/v1" if settings.supabase_url else None
+    required_claims = ["exp", "sub", "aud"]
+
+    if expected_iss:
+        required_claims.append("iss")
         try:
             unverified_claims = jwt.decode(token, options={"verify_signature": False})
             token_iss = unverified_claims.get("iss")
-            if token_iss and token_iss != expected_iss:
+            if not token_iss:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authentication token is missing required 'iss' (issuer) claim.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            if token_iss != expected_iss:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid authentication token issuer.",
@@ -95,19 +111,30 @@ def decode_token(token: str) -> UserClaims:
                 )
         except HTTPException:
             raise
-        except Exception:
-            pass
+        except Exception as err:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Malformed token claims.",
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from err
 
-    # 3. Signature verification per algorithm
+    # 4. Signature verification per algorithm
     payload: dict | None = None
     try:
+        decode_kwargs: dict[str, Any] = {
+            "algorithms": [alg],
+            "audience": "authenticated",
+            "options": {"require": required_claims},
+        }
+        if expected_iss:
+            decode_kwargs["issuer"] = expected_iss
+
         if alg == "HS256":
             if settings.supabase_jwt_secret:
                 payload = jwt.decode(
                     token,
                     settings.supabase_jwt_secret,
-                    algorithms=["HS256"],
-                    audience="authenticated",
+                    **decode_kwargs,
                 )
             elif settings.environment == "production":
                 raise HTTPException(
@@ -124,8 +151,7 @@ def decode_token(token: str) -> UserClaims:
                 payload = jwt.decode(
                     token,
                     settings.supabase_jwt_secret,
-                    algorithms=[alg],
-                    audience="authenticated",
+                    **decode_kwargs,
                 )
             elif settings.supabase_url:
                 # Verify using public key fetched from Supabase JWKS endpoint
@@ -134,8 +160,7 @@ def decode_token(token: str) -> UserClaims:
                 payload = jwt.decode(
                     token,
                     signing_key.key,
-                    algorithms=[alg],
-                    audience="authenticated",
+                    **decode_kwargs,
                 )
             elif settings.environment == "production":
                 raise HTTPException(

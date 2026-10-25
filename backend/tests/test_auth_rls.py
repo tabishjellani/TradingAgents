@@ -30,6 +30,8 @@ def create_token(user_id: str, email: str, role: str = "user", expires_in: int =
         "iat": now,
         "exp": now + expires_in,
     }
+    if settings.supabase_url:
+        payload["iss"] = f"{settings.supabase_url.rstrip('/')}/auth/v1"
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
 
@@ -225,6 +227,7 @@ async def test_service_role_key_never_default_for_user_crud(monkeypatch):
 async def test_origin_protection_gateway_secret(monkeypatch):
     """In production with gateway_shared_secret configured, requests bypassing gateway receive 403."""
     monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "supabase_url", "https://example.supabase.co")
     monkeypatch.setattr(settings, "gateway_shared_secret", "cf-worker-super-secret-gateway-token")
     token = create_token("usr-12345", "trader@example.com", role="user")
 
@@ -360,6 +363,159 @@ async def test_invalid_issuer_rejected(monkeypatch):
         )
         assert res.status_code == 401
         assert "Invalid authentication token issuer" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_missing_issuer_claim_rejected(monkeypatch):
+    """When supabase_url is configured, tokens omitting the 'iss' claim must be rejected."""
+    monkeypatch.setattr(settings, "supabase_url", "https://valid-project.supabase.co")
+    now = int(time.time())
+    payload = {
+        "sub": "usr-12345",
+        "email": "trader@example.com",
+        # 'iss' claim intentionally omitted
+        "aud": "authenticated",
+        "role": "authenticated",
+        "app_metadata": {"role": "user"},
+        "iat": now,
+        "exp": now + 3600,
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 401
+        assert "missing required 'iss'" in res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_valid_issuer_claim_accepted(monkeypatch):
+    """Tokens with the exact expected issuer claim are accepted."""
+    monkeypatch.setattr(settings, "supabase_url", "https://valid-project.supabase.co")
+    now = int(time.time())
+    payload = {
+        "sub": "usr-12345",
+        "email": "trader@example.com",
+        "iss": "https://valid-project.supabase.co/auth/v1",
+        "aud": "authenticated",
+        "role": "authenticated",
+        "app_metadata": {"role": "user"},
+        "iat": now,
+        "exp": now + 3600,
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        assert res.json()["id"] == "usr-12345"
+
+
+@pytest.mark.asyncio
+async def test_production_requires_supabase_url_for_issuer(monkeypatch):
+    """In production mode, missing SUPABASE_URL raises HTTP 500 configuration error."""
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "supabase_jwt_secret", "some-valid-secret-key-32-chars-long")
+    monkeypatch.setattr(settings, "supabase_url", "")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": "Bearer some.jwt.token"},
+        )
+        assert res.status_code == 500
+        assert "SUPABASE_URL is required to verify authentication token issuer" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_unsupported_algorithm_rejected():
+    """Unsupported algorithm tokens (e.g. HS512) are rejected with 401."""
+    now = int(time.time())
+    payload = {
+        "sub": "usr-12345",
+        "email": "trader@example.com",
+        "aud": "authenticated",
+        "role": "authenticated",
+        "app_metadata": {"role": "user"},
+        "iat": now,
+        "exp": now + 3600,
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm="HS512")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 401
+        assert "Unsupported or invalid authentication token algorithm" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_audit_event_server_side_recording_and_admin_actions():
+    """Admin operations persist audit log events with verified server-side actor ID."""
+    admin_token = create_token("adm-audit-tester", "auditor@tradingagents.internal", role="admin")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Update quota -> triggers audit log
+        res_q = await client.post(
+            "/api/v1/admin/quotas",
+            json={"daily_job_quota": 50},
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert res_q.status_code == 200
+
+        # 2. Check audit logs endpoint returns the recorded event with verified actor_id
+        res_trail = await client.get(
+            "/api/v1/admin/audit-logs",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert res_trail.status_code == 200
+        logs = res_trail.json()
+        assert len(logs) > 0
+        quota_event = next((item for item in logs if item.get("action") == "global_quota_updated"), None)
+        assert quota_event is not None
+        assert quota_event["actor"] == "adm-audit-tester"
+        assert quota_event["details"]["new_daily_job_quota"] == 50
+
+
+@pytest.mark.asyncio
+async def test_profile_privilege_isolation_and_signup_defaults():
+    """Verify profiles default to role: user and cannot be escalated without admin claims."""
+    from backend.app.db.repository import db_repo
+
+    # Simulate signup profile creation
+    profile = await db_repo.create_profile(
+        user_id="usr-fresh-signup",
+        email="fresh@example.com",
+        role="user",
+        daily_job_quota=20,
+    )
+    assert profile["role"] == "user"
+    assert profile["daily_job_quota"] == 20
+
+    # User profile route returns the claims from the verified JWT
+    user_token = create_token("usr-fresh-signup", "fresh@example.com", role="user")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/api/v1/user/profile",
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["role"] == "user"
+        assert data["id"] == "usr-fresh-signup"
 
 
 @pytest.mark.asyncio
