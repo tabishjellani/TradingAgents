@@ -32,9 +32,18 @@ class WatchlistModel(BaseModel):
 _watchlists_db: dict[str, WatchlistModel] = {}
 
 
-def _get_user_watchlists(user_id: str) -> list[WatchlistModel]:
+async def _get_user_watchlists(user_id: str, token: str | None = None) -> list[WatchlistModel]:
     lists = [w for w in _watchlists_db.values() if w.user_id == user_id]
     if not lists:
+        persisted = await db_repo.get_watchlists(user_id, token=token)
+        if persisted:
+            result: list[WatchlistModel] = []
+            for item in persisted:
+                wl = WatchlistModel.model_validate(item)
+                _watchlists_db[wl.id] = wl
+                result.append(wl)
+            return result
+
         default_wl = WatchlistModel(
             user_id=user_id,
             name="My Primary Watchlist",
@@ -46,6 +55,7 @@ def _get_user_watchlists(user_id: str) -> list[WatchlistModel]:
             ],
         )
         _watchlists_db[default_wl.id] = default_wl
+        await db_repo.save_watchlist(default_wl.model_dump(), token=token)
         return [default_wl]
     return lists
 
@@ -55,7 +65,7 @@ async def list_watchlists(
     current_user: Annotated[UserClaims, Depends(get_current_user)],
 ) -> list[WatchlistModel]:
     """List all watchlists belonging to the authenticated user."""
-    return _get_user_watchlists(current_user.id)
+    return await _get_user_watchlists(current_user.id, token=current_user.token)
 
 
 @router.post("", response_model=WatchlistModel, status_code=status.HTTP_201_CREATED)
@@ -78,6 +88,13 @@ async def add_watchlist_item(
 ) -> WatchlistModel:
     """Add a validated stock or crypto symbol to a watchlist."""
     wl = _watchlists_db.get(watchlist_id)
+    if not wl or wl.user_id != current_user.id:
+        persisted = await db_repo.get_watchlists(current_user.id, token=current_user.token)
+        for item in persisted:
+            candidate = WatchlistModel.model_validate(item)
+            _watchlists_db[candidate.id] = candidate
+            if candidate.id == watchlist_id:
+                wl = candidate
     if not wl or wl.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -107,6 +124,13 @@ async def remove_watchlist_item(
 ) -> WatchlistModel:
     """Remove a symbol from a watchlist."""
     wl = _watchlists_db.get(watchlist_id)
+    if not wl or wl.user_id != current_user.id:
+        persisted = await db_repo.get_watchlists(current_user.id, token=current_user.token)
+        for item in persisted:
+            candidate = WatchlistModel.model_validate(item)
+            _watchlists_db[candidate.id] = candidate
+            if candidate.id == watchlist_id:
+                wl = candidate
     if not wl or wl.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

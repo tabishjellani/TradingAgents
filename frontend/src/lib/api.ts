@@ -305,3 +305,84 @@ export async function triggerKillSwitch(action: 'activate' | 'deactivate', reaso
   }
   return await res.json();
 }
+
+export interface AiProviderInfo {
+  id: string;
+  name: string;
+  description: string;
+  is_active: boolean;
+  configured: boolean;
+  masked_key: string;
+  source: 'environment' | 'encrypted_vault' | 'none';
+  quick_models: string[];
+  deep_models: string[];
+  verified_quick_models?: string[];
+  verified_deep_models?: string[];
+  unverified_catalog_models?: string[];
+  current_quick_model: string;
+  current_deep_model: string;
+}
+
+export interface AiProvidersResponse {
+  active_provider: string;
+  quick_model: string;
+  deep_model: string;
+  providers: AiProviderInfo[];
+}
+
+export async function fetchAiProviders(): Promise<AiProvidersResponse> {
+  const res = await apiFetch('/admin/ai-providers');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
+export async function saveAiProviderKey(provider: string, apiKey: string): Promise<any> {
+  const res = await apiFetch('/admin/ai-providers/keys', {
+    method: 'POST',
+    body: JSON.stringify({ provider, api_key: apiKey }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to save API key (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+export async function deleteAiProviderKey(provider: string): Promise<any> {
+  const res = await apiFetch(`/admin/ai-providers/keys/${provider}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to delete API key (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+export async function updateAiConfig(provider: string, quickModel: string, deepModel: string): Promise<any> {
+  const res = await apiFetch('/admin/ai-providers/config', {
+    method: 'POST',
+    body: JSON.stringify({
+      default_ai_provider: provider,
+      default_quick_model: quickModel,
+      default_deep_model: deepModel,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to update AI config (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+export async function testAiProviderConnection(provider: string, apiKey?: string, model?: string): Promise<any> {
+  const res = await apiFetch('/admin/ai-providers/test-connection', {
+    method: 'POST',
+    body: JSON.stringify({ provider, api_key: apiKey || undefined, model: model || undefined }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Test connection failed (HTTP ${res.status})`);
+  }
+  return await res.json();
+}

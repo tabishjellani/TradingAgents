@@ -7,6 +7,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 class Settings(BaseSettings):
     """Application configuration and environment bounds."""
@@ -54,7 +56,14 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
 
     model_config = SettingsConfigDict(
-        env_file=(".env", ".env.local"),
+        env_file=(
+            str(_REPO_ROOT / ".env"),
+            str(_REPO_ROOT / ".env.local"),
+            ".env",
+            ".env.local",
+            "backend/.env",
+            "backend/.env.local",
+        ),
         env_file_encoding="utf-8",
         extra="ignore",
     )

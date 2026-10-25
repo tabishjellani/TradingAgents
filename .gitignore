@@ -229,3 +229,7 @@ reports/
 node_modules/
 dist/
 data/
+.vault_key
+*.vault_key
+secrets.enc
+*.enc

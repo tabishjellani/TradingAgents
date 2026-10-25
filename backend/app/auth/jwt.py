@@ -5,11 +5,21 @@ from typing import Annotated
 import jwt
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import PyJWKClient
 from pydantic import BaseModel
 
 from backend.app.config import settings
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+_jwks_clients: dict[str, PyJWKClient] = {}
+
+
+def _get_jwks_client(supabase_url: str) -> PyJWKClient:
+    """Retrieve or initialize cached JWKS client for a Supabase project."""
+    url = f"{supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+    if url not in _jwks_clients:
+        _jwks_clients[url] = PyJWKClient(url, cache_jwk_set=True, lifespan=3600)
+    return _jwks_clients[url]
 
 
 class UserClaims(BaseModel):
@@ -24,7 +34,8 @@ class UserClaims(BaseModel):
 def decode_token(token: str) -> UserClaims:
     """Decode and validate a Supabase JWT token.
 
-    Handles real HS256 Supabase JWTs as well as isolated test tokens.
+    Handles real HS256 symmetric Supabase JWTs, modern RS256/ES256 asymmetric Supabase JWTs,
+    as well as isolated development test tokens.
     """
     if not token or not token.strip():
         raise HTTPException(
@@ -33,7 +44,14 @@ def decode_token(token: str) -> UserClaims:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # 1. Support deterministic test mock tokens (only allowed during offline tests and non-production development)
+    # 1. Enforce JWT secret requirement in production mode
+    if settings.environment == "production" and not settings.supabase_jwt_secret:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server configuration error: SUPABASE_JWT_SECRET is required to verify authentication tokens in production.",
+        )
+
+    # 2. Support deterministic test mock tokens (only allowed during offline tests and non-production development)
     if token.startswith("test-token:"):
         if settings.environment == "production":
             raise HTTPException(
@@ -45,81 +63,138 @@ def decode_token(token: str) -> UserClaims:
         if len(parts) >= 4:
             return UserClaims(id=parts[1], email=parts[2], role=parts[3], token=token)
 
-    # 2. Supabase JWT Secret Verification
-    if settings.supabase_jwt_secret:
-        try:
-            # Verify issuer if token contains iss and supabase_url is configured
-            if settings.supabase_url:
-                expected_iss = f"{settings.supabase_url.rstrip('/')}/auth/v1"
-                try:
-                    unverified_claims = jwt.decode(token, options={"verify_signature": False})
-                    token_iss = unverified_claims.get("iss")
-                    if token_iss and token_iss != expected_iss:
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Invalid authentication token issuer.",
-                            headers={"WWW-Authenticate": "Bearer"},
-                        )
-                except HTTPException:
-                    raise
-                except Exception:
-                    pass
-
-            payload = jwt.decode(
-                token,
-                settings.supabase_jwt_secret,
-                algorithms=["HS256"],
-                audience="authenticated",
-            )
-            user_id = payload.get("sub")
-            email = payload.get("email", "")
-            # Check user role strictly from app_metadata (never from user_metadata)
-            app_meta = payload.get("app_metadata", {})
-            assigned_role = app_meta.get("role", "user")
-            role = assigned_role if assigned_role in ("user", "operator", "admin") else "user"
-
-            if not user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid token claims: missing subject.",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-
-            return UserClaims(id=user_id, email=email, role=role, token=token)
-        except jwt.ExpiredSignatureError as err:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authentication token has expired.",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from err
-        except jwt.InvalidTokenError as err:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication token.",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from err
-
-    # In production, unverified decoding without secret signature check is strictly forbidden
-    if settings.environment == "production":
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Server configuration error: SUPABASE_JWT_SECRET is required to verify authentication tokens in production.",
-        )
-
-    # 3. Unverified decode fallback ONLY in local offline development if JWT secret is not configured
+    # Inspect token header for algorithm validation
     try:
-        unverified = jwt.decode(token, options={"verify_signature": False})
-        user_id = unverified.get("sub") or "local-dev-user"
-        email = unverified.get("email") or "dev@local.test"
-        app_meta = unverified.get("app_metadata", {})
-        assigned_role = app_meta.get("role", "user")
-        role = assigned_role if assigned_role in ("user", "operator", "admin") else "user"
-        return UserClaims(id=user_id, email=email, role=role, token=token)
+        header = jwt.get_unverified_header(token)
     except Exception as err:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Malformed token header.",
+            headers={"WWW-Authenticate": "Bearer"},
         ) from err
+
+    alg = header.get("alg")
+    if not alg or alg.lower() == "none" or alg not in ("HS256", "RS256", "ES256"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Unsupported or invalid authentication token algorithm '{alg}'.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # 2. Issuer check if token contains iss and supabase_url is configured
+    if settings.supabase_url:
+        expected_iss = f"{settings.supabase_url.rstrip('/')}/auth/v1"
+        try:
+            unverified_claims = jwt.decode(token, options={"verify_signature": False})
+            token_iss = unverified_claims.get("iss")
+            if token_iss and token_iss != expected_iss:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid authentication token issuer.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    # 3. Signature verification per algorithm
+    payload: dict | None = None
+    try:
+        if alg == "HS256":
+            if settings.supabase_jwt_secret:
+                payload = jwt.decode(
+                    token,
+                    settings.supabase_jwt_secret,
+                    algorithms=["HS256"],
+                    audience="authenticated",
+                )
+            elif settings.environment == "production":
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Server configuration error: SUPABASE_JWT_SECRET is required to verify authentication tokens in production.",
+                )
+            else:
+                # Local dev fallback only
+                payload = jwt.decode(token, options={"verify_signature": False})
+
+        elif alg in ("RS256", "ES256"):
+            if settings.supabase_jwt_secret and "BEGIN" in settings.supabase_jwt_secret:
+                # Asymmetric public key provided directly in secret config
+                payload = jwt.decode(
+                    token,
+                    settings.supabase_jwt_secret,
+                    algorithms=[alg],
+                    audience="authenticated",
+                )
+            elif settings.supabase_url:
+                # Verify using public key fetched from Supabase JWKS endpoint
+                jwks_client = _get_jwks_client(settings.supabase_url)
+                signing_key = jwks_client.get_signing_key_from_jwt(token)
+                payload = jwt.decode(
+                    token,
+                    signing_key.key,
+                    algorithms=[alg],
+                    audience="authenticated",
+                )
+            elif settings.environment == "production":
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Server configuration error: SUPABASE_URL or public key is required to verify asymmetric Supabase tokens in production.",
+                )
+            else:
+                # Local dev fallback only
+                payload = jwt.decode(token, options={"verify_signature": False})
+
+    except jwt.ExpiredSignatureError as err:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token has expired.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from err
+    except jwt.InvalidSignatureError as err:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid authentication token: {err}",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from err
+    except jwt.InvalidTokenError as err:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid authentication token: {err}",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from err
+    except HTTPException:
+        raise
+    except Exception as err:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid authentication token: {err}",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from err
+
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication token payload.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user_id = payload.get("sub")
+    email = payload.get("email", "")
+    # Check user role strictly from app_metadata (never from user_metadata)
+    app_meta = payload.get("app_metadata", {})
+    assigned_role = app_meta.get("role", "user")
+    role = assigned_role if assigned_role in ("user", "operator", "admin") else "user"
+
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token claims: missing subject.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return UserClaims(id=user_id, email=email, role=role, token=token)
 
 
 async def get_current_user(

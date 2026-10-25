@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from backend.app.config import settings
 from tradingagents.agents.rating import is_review, run_rating
 from tradingagents.dataflows.symbols import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -38,8 +39,14 @@ def execute_research_run(
     # 2. Assemble run configuration from defaults
     run_config = DEFAULT_CONFIG.copy()
 
-    # Bridge GEMINI_API_KEY -> GOOGLE_API_KEY
+    # Align default provider and models with backend settings if not explicitly set in environment
     import os
+    if "TRADINGAGENTS_LLM_PROVIDER" not in os.environ:
+        run_config["llm_provider"] = settings.default_ai_provider
+        run_config["quick_think_llm"] = settings.default_quick_model
+        run_config["deep_think_llm"] = settings.default_deep_model
+
+    # Bridge GEMINI_API_KEY -> GOOGLE_API_KEY
     if not os.environ.get("GOOGLE_API_KEY") and os.environ.get("GEMINI_API_KEY"):
         os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
 
@@ -66,6 +73,9 @@ def execute_research_run(
             run_config["deep_think_llm"] = requested_model
 
     provider = run_config.get("llm_provider", "openai").lower()
+    from backend.app.core.secrets_vault import vault
+    vault.get_provider_key(provider)
+
     required_env_vars = {
         "google": ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
         "groq": ["GROQ_API_KEY"],
@@ -79,7 +89,7 @@ def execute_research_run(
         key_list = " or ".join(allowed_keys)
         raise EngineExecutionError(
             f"No API key configured for {provider.title()} provider. "
-            f"Please set {key_list} in your backend/.env file to run real multi-agent analysis."
+            f"Please configure {key_list} via Admin Settings or in your backend/.env file to run real multi-agent analysis."
         )
 
     analysts = tuple(selected_analysts) if selected_analysts else (

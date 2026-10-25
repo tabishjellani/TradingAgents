@@ -83,14 +83,22 @@ def _fetch_quote_data(symbol: str) -> MarketQuoteResponse:
     ticker = yf.Ticker(canonical)
     info = ticker.fast_info
 
-    last_price = float(getattr(info, "last_price", 0.0) or 0.0)
-    prev_close = float(getattr(info, "previous_close", 0.0) or last_price or 1.0)
+    try:
+        last_price = float(getattr(info, "last_price", 0.0) or 0.0)
+        prev_close = float(getattr(info, "previous_close", 0.0) or last_price or 1.0)
+        day_high = float(getattr(info, "day_high", 0.0) or last_price)
+        day_low = float(getattr(info, "day_low", 0.0) or last_price)
+        volume = float(getattr(info, "last_volume", 0.0) or 0.0)
+    except Exception as exc:
+        logger.warning("Could not fetch remote quote for %s: %s. Using default quote.", clean_symbol, exc)
+        last_price = 100.0 if not is_crypto else 90000.0
+        prev_close = last_price
+        day_high = last_price
+        day_low = last_price
+        volume = 0.0
+
     change = round(last_price - prev_close, 2)
     change_pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
-
-    day_high = float(getattr(info, "day_high", 0.0) or last_price)
-    day_low = float(getattr(info, "day_low", 0.0) or last_price)
-    volume = float(getattr(info, "last_volume", 0.0) or 0.0)
 
     if last_price == 0.0:
         last_price = 100.0 if not is_crypto else 90000.0

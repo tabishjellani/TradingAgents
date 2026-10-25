@@ -115,7 +115,11 @@ class DatabaseRepository:
                         headers=self._get_supabase_headers(token),
                     )
                     if res.status_code == 200:
-                        return res.json()
+                        records = res.json()
+                        for r in records:
+                            if "watchlist_items" in r and "items" not in r:
+                                r["items"] = r.pop("watchlist_items")
+                        return records
                     self._handle_error("get_watchlists", f"HTTP {res.status_code}: {res.text}")
             except Exception as exc:
                 self._handle_error("get_watchlists", exc)
@@ -134,12 +138,33 @@ class DatabaseRepository:
                 }
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     res = await client.post(
-                        f"{settings.supabase_url}/rest/v1/watchlists",
+                        f"{settings.supabase_url}/rest/v1/watchlists?on_conflict=id",
                         json=payload,
                         headers=self._get_supabase_headers(token),
                     )
                     if res.status_code not in (200, 201):
                         self._handle_error("save_watchlist", f"HTTP {res.status_code}: {res.text}")
+
+                    # Also persist watchlist items if present
+                    items = watchlist.get("items", [])
+                    if isinstance(items, list):
+                        for idx, item in enumerate(items):
+                            sym = item.get("symbol") if isinstance(item, dict) else str(item)
+                            atype = item.get("asset_type", "stock") if isinstance(item, dict) else "stock"
+                            item_id = item.get("id") if isinstance(item, dict) else None
+                            item_payload: dict[str, Any] = {
+                                "watchlist_id": watchlist["id"],
+                                "symbol": sym,
+                                "asset_type": atype,
+                                "sort_order": idx,
+                            }
+                            if item_id:
+                                item_payload["id"] = item_id
+                            await client.post(
+                                f"{settings.supabase_url}/rest/v1/watchlist_items?on_conflict=watchlist_id,symbol",
+                                json=item_payload,
+                                headers=self._get_supabase_headers(token),
+                            )
             except Exception as exc:
                 self._handle_error("save_watchlist", exc)
 
@@ -185,7 +210,7 @@ class DatabaseRepository:
                 }
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     res = await client.post(
-                        f"{settings.supabase_url}/rest/v1/portfolios",
+                        f"{settings.supabase_url}/rest/v1/portfolios?on_conflict=id",
                         json=payload,
                         headers=self._get_supabase_headers(token),
                     )
@@ -204,7 +229,7 @@ class DatabaseRepository:
                             "average_price": pos.get("average_entry_price", pos.get("average_price", 0.0)),
                         }
                         await client.post(
-                            f"{settings.supabase_url}/rest/v1/positions",
+                            f"{settings.supabase_url}/rest/v1/positions?on_conflict=portfolio_id,symbol",
                             json=pos_payload,
                             headers=self._get_supabase_headers(token),
                         )
@@ -229,10 +254,11 @@ class DatabaseRepository:
                     "status": order["status"],
                     "fees": order.get("fees", 0.0),
                     "idempotency_key": order.get("idempotency_key"),
+                    "executed_at": order.get("executed_at"),
                 }
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     res = await client.post(
-                        f"{settings.supabase_url}/rest/v1/orders",
+                        f"{settings.supabase_url}/rest/v1/orders?on_conflict=id",
                         json=payload,
                         headers=self._get_supabase_headers(token),
                     )
@@ -270,7 +296,7 @@ class DatabaseRepository:
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     res = await client.post(
-                        f"{settings.supabase_url}/rest/v1/research_jobs",
+                        f"{settings.supabase_url}/rest/v1/research_jobs?on_conflict=id",
                         json={
                             "id": job["id"],
                             "user_id": job["user_id"],
@@ -335,6 +361,7 @@ class DatabaseRepository:
         if self.is_supabase_enabled:
             try:
                 payload = {
+                    "id": report.get("id", report["job_id"]),
                     "job_id": report["job_id"],
                     "user_id": report["user_id"],
                     "symbol": report["symbol"],
@@ -342,11 +369,9 @@ class DatabaseRepository:
                     "markdown_content": report.get("markdown_content", ""),
                     "html_content": report.get("html_content"),
                 }
-                if report.get("id"):
-                    payload["id"] = report["id"]
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     res = await client.post(
-                        f"{settings.supabase_url}/rest/v1/research_reports",
+                        f"{settings.supabase_url}/rest/v1/research_reports?on_conflict=id",
                         json=payload,
                         headers=self._get_supabase_headers(token),
                     )
@@ -393,7 +418,7 @@ class DatabaseRepository:
                 }
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     res = await client.post(
-                        f"{settings.supabase_url}/rest/v1/alert_rules",
+                        f"{settings.supabase_url}/rest/v1/alert_rules?on_conflict=id",
                         json=payload,
                         headers=self._get_supabase_headers(token),
                     )
