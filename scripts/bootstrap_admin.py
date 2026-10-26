@@ -1,18 +1,18 @@
-"""Secure One-Time Admin Bootstrap Script for Supabase.
+"""Secure Super Admin & Admin Bootstrap Utility for Supabase.
 
-Promotes a registered Supabase user to the 'admin' role by updating:
-1. auth.users.raw_app_meta_data -> {"role": "admin"} (Server-trusted JWT claim)
-2. public.profiles -> role = 'admin', daily_job_quota = 1000
+Promotes an existing registered Supabase user to the 'super_admin' or 'admin' role by updating:
+1. auth.users.raw_app_meta_data -> {"role": target_role} (Server-trusted JWT claim)
+2. public.profiles -> role = target_role, daily_job_quota = 1000
 
-Requirements:
-- SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in the server environment / .env.
-- The target user MUST have registered an account beforehand (email must exist in auth.users).
-- NEVER expose SUPABASE_SERVICE_ROLE_KEY to the frontend or check into version control.
-- After running, the administrator MUST log out and log back in (or refresh session)
-  to receive an updated JWT containing the 'app_metadata.role: admin' claim.
+Security & Safety Features:
+- Does NOT create accounts with arbitrary credentials; target user must already exist in auth.users.
+- Requires explicit operator confirmation before making state changes (unless --yes flag is passed).
+- Never prints or exposes the SUPABASE_SERVICE_ROLE_KEY.
+- Idempotent: safe to run multiple times without corrupting metadata or profiles.
+- Supports dry-run inspection to preview proposed changes.
 
 Usage:
-    python scripts/bootstrap_admin.py --email admin@example.com [--dry-run]
+    python scripts/bootstrap_admin.py --email admin@example.com [--role super_admin] [--dry-run] [--yes]
 """
 
 from __future__ import annotations
@@ -28,16 +28,28 @@ from backend.app.config import settings
 
 
 def parse_args(args: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Promote an existing registered user to administrator.")
+    parser = argparse.ArgumentParser(description="Promote an existing registered user to administrator or super administrator.")
     parser.add_argument(
         "--email",
         required=True,
-        help="Email address of the existing registered user to promote to admin.",
+        help="Email address of the existing registered user to promote.",
+    )
+    parser.add_argument(
+        "--role",
+        choices=["admin", "super_admin"],
+        default="super_admin",
+        help="Target privileged role (default: super_admin).",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Simulate the promotion without making changes.",
+        help="Simulate the promotion without making remote changes.",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Bypass interactive confirmation prompt.",
     )
     return parser.parse_args(args)
 
@@ -49,19 +61,19 @@ def validate_environment() -> tuple[str, str]:
 
     if not supabase_url or not supabase_url.strip():
         raise RuntimeError(
-            "SUPABASE_URL is required to bootstrap an admin user. "
-            "Please configure SUPABASE_URL in your server .env file."
+            "SUPABASE_URL is required to bootstrap an administrator. "
+            "Please configure SUPABASE_URL in your server environment / .env file."
         )
     if not service_key or not service_key.strip():
         raise RuntimeError(
-            "SUPABASE_SERVICE_ROLE_KEY is required to bootstrap an admin user. "
-            "Please configure SUPABASE_SERVICE_ROLE_KEY in your server .env file."
+            "SUPABASE_SERVICE_ROLE_KEY is required to bootstrap an administrator. "
+            "Please configure SUPABASE_SERVICE_ROLE_KEY in your server environment / .env file."
         )
     return supabase_url.rstrip("/"), service_key.strip()
 
 
 async def find_user_by_email(client: httpx.AsyncClient, supabase_url: str, service_key: str, email: str) -> dict[str, Any]:
-    """Find a user in auth.users by email using the Supabase Admin Auth API."""
+    """Find a user in auth.users by email using the Supabase Auth Admin API."""
     headers = {
         "apikey": service_key,
         "Authorization": f"Bearer {service_key}",
@@ -84,10 +96,12 @@ async def find_user_by_email(client: httpx.AsyncClient, supabase_url: str, servi
 
 async def promote_user_to_admin(
     email: str,
+    role: str = "admin",
     dry_run: bool = False,
+    auto_confirm: bool = True,
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
-    """Execute the admin role assignment against Supabase."""
+    """Execute the admin or super_admin role assignment against Supabase."""
     supabase_url, service_key = validate_environment()
     target_email = email.strip().lower()
 
@@ -101,13 +115,22 @@ async def promote_user_to_admin(
         user_id = user["id"]
 
         current_app_meta = user.get("app_metadata", {})
-        if current_app_meta.get("role") == "admin":
-            print(f"[INFO] User '{target_email}' already has app_metadata.role = 'admin'.")
+        current_role = current_app_meta.get("role", "user")
+
+        if current_role == role:
+            print(f"[INFO] User '{target_email}' already has app_metadata.role = '{role}'. No changes needed.")
+            return {"user_id": user_id, "email": target_email, "promoted": False, "already_had_role": True}
 
         if dry_run:
-            print(f"[DRY-RUN] Would assign app_metadata.role = 'admin' to user {target_email} (UUID: {user_id}).")
-            print(f"[DRY-RUN] Would update public.profiles role = 'admin' for UUID {user_id}.")
+            print(f"[DRY-RUN] Would assign app_metadata.role = '{role}' to user {target_email} (UUID: {user_id}).")
+            print(f"[DRY-RUN] Would update public.profiles role = '{role}' for UUID {user_id}.")
             return {"user_id": user_id, "email": target_email, "promoted": False, "dry_run": True}
+
+        if not auto_confirm and sys.stdin.isatty():
+            confirmation = input(f"Confirm promoting user '{target_email}' ({user_id}) to '{role}'? [y/N]: ").strip().lower()
+            if confirmation not in ("y", "yes"):
+                print("[CANCELLED] Operator aborted bootstrap promotion.")
+                return {"user_id": user_id, "email": target_email, "promoted": False, "cancelled": True}
 
         headers = {
             "apikey": service_key,
@@ -118,7 +141,7 @@ async def promote_user_to_admin(
 
         # 1. Update auth.users app_metadata via Supabase Auth Admin API
         update_user_url = f"{supabase_url}/auth/v1/admin/users/{user_id}"
-        updated_app_meta = {**current_app_meta, "role": "admin"}
+        updated_app_meta = {**current_app_meta, "role": role}
         user_res = await client.put(
             update_user_url,
             headers=headers,
@@ -132,17 +155,16 @@ async def promote_user_to_admin(
         prof_res = await client.patch(
             profile_url,
             headers=headers,
-            json={"role": "admin", "daily_job_quota": 1000},
+            json={"role": role, "daily_job_quota": 1000},
         )
         if prof_res.status_code not in (200, 204):
-            # Non-fatal if profile sync fails, but log warning
             print(f"[WARNING] Profile sync returned HTTP {prof_res.status_code}: {prof_res.text}")
 
-        print(f"[SUCCESS] User '{target_email}' (UUID: {user_id}) has been promoted to 'admin'.")
+        print(f"[SUCCESS] User '{target_email}' (UUID: {user_id}) has been promoted to '{role}'.")
         print("[IMPORTANT] Supabase JWT claims are signed upon authentication.")
         print("            The user MUST log out and log back in (or refresh session)")
-        print("            in the frontend to receive an updated JWT containing the admin claim.")
-        return {"user_id": user_id, "email": target_email, "promoted": True, "dry_run": False}
+        print(f"            in the frontend to receive an updated JWT containing the '{role}' claim.")
+        return {"user_id": user_id, "email": target_email, "promoted": True, "dry_run": False, "new_role": role}
 
     finally:
         if should_close_client:
@@ -153,7 +175,14 @@ def main():
     args = parse_args()
     import asyncio
     try:
-        asyncio.run(promote_user_to_admin(args.email, dry_run=args.dry_run))
+        asyncio.run(
+            promote_user_to_admin(
+                email=args.email,
+                role=args.role,
+                dry_run=args.dry_run,
+                auto_confirm=args.yes,
+            )
+        )
     except Exception as exc:
         print(f"[ERROR] Bootstrap failed: {exc}", file=sys.stderr)
         sys.exit(1)

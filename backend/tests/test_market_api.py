@@ -79,3 +79,37 @@ async def test_watchlist_lifecycle():
         assert del_res.status_code == 200
         updated_items = del_res.json()["items"]
         assert not any(i["symbol"] == "MSFT" for i in updated_items)
+
+
+@pytest.mark.asyncio
+async def test_market_provider_status():
+    """Verify provider status endpoint reports health metrics without credentials."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/api/v1/market/status")
+        assert res.status_code == 200
+        data = res.json()
+        assert "provider" in data
+        assert data["status"] in ("healthy", "degraded", "down")
+        assert "supported_assets" in data
+        assert isinstance(data["cache_entries"], int)
+        # Ensure no secret keys are present
+        assert "api_key" not in data
+        assert "secret" not in data
+
+
+@pytest.mark.asyncio
+async def test_symbol_search():
+    """Verify stock and crypto symbol search."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/api/v1/market/search?query=NVDA")
+        assert res.status_code == 200
+        results = res.json()
+        assert len(results) > 0
+        assert any(r["symbol"] == "NVDA" for r in results)
+
+        crypto_res = await client.get("/api/v1/market/search?query=BTC")
+        assert crypto_res.status_code == 200
+        crypto_results = crypto_res.json()
+        assert any(r["symbol"] == "BTC-USD" for r in crypto_results)

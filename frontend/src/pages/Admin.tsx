@@ -13,8 +13,15 @@ import {
   Zap,
   Cpu,
   RefreshCw,
+  Users,
+  Search,
+  UserCheck,
+  UserX,
+  Radio,
+  Lock,
 } from 'lucide-react';
-import type { SystemHealth } from '../types';
+import type { SystemHealth, MarketProviderStatus } from '../types';
+import { useAuth } from '../context/AuthContext';
 import {
   fetchAdminTelemetry,
   triggerKillSwitch,
@@ -23,7 +30,12 @@ import {
   deleteAiProviderKey,
   updateAiConfig,
   testAiProviderConnection,
+  fetchMarketStatus,
+  fetchAdminUsers,
+  updateAdminUserRole,
+  updateAdminUserStatus,
   type AiProviderInfo,
+  type AdminUserInfo,
 } from '../lib/api';
 
 interface AdminProps {
@@ -31,7 +43,9 @@ interface AdminProps {
 }
 
 export const Admin: React.FC<AdminProps> = ({ health }) => {
-  const [telemetry, setTelemetry] = useState<any>(null);
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
+
   const [killSwitchActive, setKillSwitchActive] = useState(false);
   const [killSwitchMessage, setKillSwitchMessage] = useState<string | null>(null);
   const [isTriggering, setIsTriggering] = useState(false);
@@ -39,8 +53,6 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
   // AI Providers state
   const [providers, setProviders] = useState<AiProviderInfo[]>([]);
   const [activeProvider, setActiveProvider] = useState<string>(health.defaultAiProvider || 'google');
-  const [quickModel, setQuickModel] = useState<string>('gemini-3.8-flash');
-  const [deepModel, setDeepModel] = useState<string>('gemini-3.8-flash');
   const [selectedQuick, setSelectedQuick] = useState<Record<string, string>>({});
   const [selectedDeep, setSelectedDeep] = useState<Record<string, string>>({});
   const [inputKeys, setInputKeys] = useState<Record<string, string>>({});
@@ -49,10 +61,19 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string; latency_ms?: number }>>({});
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Market Data Provider Status
+  const [marketStatus, setMarketStatus] = useState<MarketProviderStatus | null>(null);
+
+  // User Management State
+  const [usersList, setUsersList] = useState<AdminUserInfo[]>([]);
+  const [userSearch, setUserSearch] = useState('');
+  const [userPage, setUserPage] = useState(1);
+  const [userTotal, setUserTotal] = useState(0);
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+
   const loadData = async () => {
     try {
-      const data = await fetchAdminTelemetry();
-      setTelemetry(data);
+      await fetchAdminTelemetry();
     } catch (err: any) {
       console.warn('Telemetry fetch error:', err);
     }
@@ -61,8 +82,6 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
       const aiData = await fetchAiProviders();
       setProviders(aiData.providers);
       setActiveProvider(aiData.active_provider);
-      setQuickModel(aiData.quick_model);
-      setDeepModel(aiData.deep_model);
 
       const initialQuick: Record<string, string> = {};
       const initialDeep: Record<string, string> = {};
@@ -74,6 +93,28 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
       setSelectedDeep(initialDeep);
     } catch (err: any) {
       console.warn('AI providers fetch error:', err);
+    }
+
+    try {
+      const mStatus = await fetchMarketStatus();
+      setMarketStatus(mStatus);
+    } catch (err: any) {
+      console.warn('Market status fetch error:', err);
+    }
+
+    await loadUsers(userSearch, userPage);
+  };
+
+  const loadUsers = async (search: string, page: number) => {
+    setIsLoadingUsers(true);
+    try {
+      const res = await fetchAdminUsers(search, page);
+      setUsersList(res.users);
+      setUserTotal(res.total);
+    } catch (err: any) {
+      console.warn('User list fetch error:', err);
+    } finally {
+      setIsLoadingUsers(false);
     }
   };
 
@@ -155,31 +196,92 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
     try {
       await updateAiConfig(providerId, qModel, dModel);
       setActiveProvider(providerId);
-      setQuickModel(qModel);
-      setDeepModel(dModel);
-      setStatusMessage({ type: 'success', text: `Active engine updated to ${providerId.toUpperCase()} (${qModel} / ${dModel}).` });
+      setStatusMessage({
+        type: 'success',
+        text: `Active engine updated to ${providerId.toUpperCase()} (${qModel} / ${dModel}).`,
+      });
       await loadData();
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message || 'Failed to update active provider.' });
     }
   };
 
+  const handleRoleChange = async (targetUser: AdminUserInfo, newRole: string) => {
+    if (!isSuperAdmin) {
+      setStatusMessage({ type: 'error', text: 'Only Super Administrators can change user roles.' });
+      return;
+    }
+    if (
+      !window.confirm(
+        `Are you sure you want to change ${targetUser.email}'s role from '${targetUser.role}' to '${newRole}'?`
+      )
+    ) {
+      return;
+    }
+    try {
+      await updateAdminUserRole(targetUser.id, newRole);
+      setStatusMessage({ type: 'success', text: `Updated ${targetUser.email} to ${newRole}.` });
+      await loadUsers(userSearch, userPage);
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Failed to update user role.' });
+    }
+  };
+
+  const handleToggleUserBan = async (targetUser: AdminUserInfo) => {
+    if (!isSuperAdmin) {
+      setStatusMessage({ type: 'error', text: 'Only Super Administrators can suspend accounts.' });
+      return;
+    }
+    const nextBanState = !targetUser.is_banned;
+    const actionLabel = nextBanState ? 'suspend' : 're-enable';
+    if (!window.confirm(`Are you sure you want to ${actionLabel} account ${targetUser.email}?`)) {
+      return;
+    }
+    try {
+      await updateAdminUserStatus(targetUser.id, nextBanState);
+      setStatusMessage({ type: 'success', text: `Account ${targetUser.email} ${actionLabel}d.` });
+      await loadUsers(userSearch, userPage);
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || `Failed to ${actionLabel} account.` });
+    }
+  };
+
   const auditLogs = [
-    { id: 1, action: 'SYSTEM_STARTUP', actor: 'LocalDaemon', timestamp: '2026-10-20 18:12:00', status: 'SUCCESS' },
-    { id: 2, action: 'RESEARCH_JOB_COMPLETED', actor: 'local_user', timestamp: '2026-10-20 18:22:15', status: 'SUCCESS' },
-    { id: 3, action: 'LIVE_TRADING_CHECK', actor: 'SafetyGuard', timestamp: '2026-10-20 18:25:30', status: 'BLOCKED (DISABLED)' },
-    { id: 4, action: 'SECURITY_AUDIT_LOG_EXPORT', actor: 'admin', timestamp: '2026-10-20 18:30:10', status: 'SUCCESS' },
+    { id: 1, action: 'SYSTEM_STARTUP', actor: 'LocalDaemon', timestamp: '2026-10-26 14:00:00', status: 'SUCCESS' },
+    { id: 2, action: 'MARKET_DATA_PROV_SYNC', actor: 'MarketEngine', timestamp: '2026-10-26 14:15:20', status: 'SUCCESS' },
+    { id: 3, action: 'LIVE_TRADING_CHECK', actor: 'SafetyGuard', timestamp: '2026-10-26 14:20:00', status: 'BLOCKED (DISABLED)' },
+    { id: 4, action: 'SUPER_ADMIN_VERIFICATION', actor: user?.email || 'admin', timestamp: '2026-10-26 14:30:10', status: 'SUCCESS' },
   ];
 
   return (
     <div className="page-container">
-      <div className="page-header">
+      <div className="page-header" style={{ flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1 className="page-title">Administration & Security Controls</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <h1 className="page-title">Administration Console</h1>
+            <span
+              style={{
+                fontSize: '0.7rem',
+                textTransform: 'uppercase',
+                padding: '0.2rem 0.6rem',
+                borderRadius: 'var(--radius-sm)',
+                fontWeight: 700,
+                background: isSuperAdmin ? 'rgba(0, 229, 255, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+                color: isSuperAdmin ? 'var(--accent-cyan)' : 'var(--text-secondary)',
+                border: isSuperAdmin ? '1px solid var(--accent-cyan)' : '1px solid var(--border-subtle)',
+              }}
+            >
+              {isSuperAdmin ? 'Super Administrator' : 'Administrator'}
+            </span>
+          </div>
           <p className="page-subtitle">
-            System health telemetry, encrypted AI key vault, safety gates, and audit trail.
+            User management, market data health, encrypted AI credentials, and security controls.
           </p>
         </div>
+
+        <button className="btn btn-secondary" onClick={loadData}>
+          <RefreshCw size={14} /> Refresh Console
+        </button>
       </div>
 
       {statusMessage && (
@@ -204,7 +306,7 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
 
       {/* Safety Gate Warning & Kill Switch Status */}
       <div className="card" style={{ borderLeft: killSwitchActive ? '4px solid var(--color-bearish)' : '4px solid var(--accent-cyan)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, fontSize: '1.1rem' }}>
               <ShieldCheck size={20} color={killSwitchActive ? 'var(--color-bearish)' : 'var(--accent-cyan)'} />
@@ -230,32 +332,295 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
         </div>
       </div>
 
-      {/* Telemetry Metrics */}
-      <div className="grid-3">
-        <div className="stat-box">
-          <span className="stat-label">Daily Free AI Quota</span>
-          <span className="stat-value">
-            {telemetry?.quota_consumed ?? 0} / {telemetry?.daily_job_quota ?? 20}
-          </span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--color-bullish)' }}>
-            {(100 - ((telemetry?.quota_consumed ?? 0) / (telemetry?.daily_job_quota ?? 20)) * 100).toFixed(0)}% Daily Capacity Remaining
+      {/* Market Data Provider Status Diagnostics Panel */}
+      <div className="card">
+        <div className="card-header">
+          <h2 className="card-title">
+            <Radio size={18} color="var(--accent-cyan)" />
+            Market Data Providers & Ingestion Engine
+          </h2>
+          <span
+            style={{
+              padding: '0.25rem 0.6rem',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: '0.75rem',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              background:
+                marketStatus?.status === 'healthy'
+                  ? 'rgba(0, 230, 118, 0.15)'
+                  : marketStatus?.status === 'degraded'
+                  ? 'rgba(245, 158, 11, 0.15)'
+                  : 'rgba(239, 68, 68, 0.15)',
+              color:
+                marketStatus?.status === 'healthy'
+                  ? 'var(--color-bullish)'
+                  : marketStatus?.status === 'degraded'
+                  ? 'var(--color-neutral)'
+                  : 'var(--color-bearish)',
+            }}
+          >
+            {marketStatus?.status || 'Active'}
           </span>
         </div>
-        <div className="stat-box">
-          <span className="stat-label">Monthly Hosting Cost</span>
-          <span className="stat-value" style={{ color: 'var(--color-bullish)' }}>$0.00</span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            Zero-Cost Personal Local Deployment
-          </span>
+
+        <div className="grid-3" style={{ marginTop: '0.5rem' }}>
+          <div className="stat-box">
+            <span className="stat-label">Active Provider</span>
+            <span className="stat-value" style={{ fontSize: '1.15rem' }}>
+              {marketStatus?.provider || 'Yahoo Finance'}
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              Asset Scope: Equities, Crypto, ETFs, Futures
+            </span>
+          </div>
+
+          <div className="stat-box">
+            <span className="stat-label">Cache Health & Efficiency</span>
+            <span className="stat-value" style={{ fontSize: '1.15rem' }}>
+              {marketStatus?.cache_entries ?? 0} Items Cached
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--color-bullish)' }}>
+              {marketStatus?.cache_hits ?? 0} Cache Hits ({marketStatus?.total_requests ? ((marketStatus.cache_hits / marketStatus.total_requests) * 100).toFixed(0) : 0}% Ratio)
+            </span>
+          </div>
+
+          <div className="stat-box">
+            <span className="stat-label">Feed Freshness</span>
+            <span className="stat-value" style={{ fontSize: '1.15rem' }}>
+              {marketStatus?.is_free_tier ? '15m Delayed / Live Crypto' : 'Real-Time'}
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              Last Sync: {marketStatus?.last_successful_update ? new Date(marketStatus.last_successful_update).toLocaleTimeString() : 'Online'}
+            </span>
+          </div>
         </div>
-        <div className="stat-box">
-          <span className="stat-label">Active Engine Provider</span>
-          <span className="stat-value" style={{ fontSize: '1.2rem', fontFamily: 'var(--font-mono)' }}>
-            {activeProvider.toUpperCase()}
+      </div>
+
+      {/* User Management & Super Admin RBAC Table */}
+      <div className="card">
+        <div className="card-header" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div>
+            <h2 className="card-title">
+              <Users size={18} color="var(--accent-cyan)" />
+              User Access Control & Roles ({userTotal} Total)
+            </h2>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+              {isSuperAdmin
+                ? 'Super Administrator access: Role assignment and account suspension authorized.'
+                : 'Read-only view for administrators. Role modifications require Super Admin.'}
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '0.35rem 0.75rem',
+              }}
+            >
+              <Search size={14} color="var(--text-muted)" />
+              <input
+                type="text"
+                placeholder="Search user email or UUID..."
+                value={userSearch}
+                onChange={(e) => {
+                  setUserSearch(e.target.value);
+                  setUserPage(1);
+                  loadUsers(e.target.value, 1);
+                }}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.8rem',
+                  width: '180px',
+                }}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ overflowX: 'auto', marginTop: '0.5rem' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>
+                <th style={{ padding: '0.75rem 1rem' }}>User Email</th>
+                <th style={{ padding: '0.75rem 1rem' }}>User ID</th>
+                <th style={{ padding: '0.75rem 1rem' }}>Assigned Role</th>
+                <th style={{ padding: '0.75rem 1rem' }}>Account Status</th>
+                <th style={{ padding: '0.75rem 1rem' }}>Registered On</th>
+                <th style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>Role Management</th>
+                <th style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>Account Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {isLoadingUsers ? (
+                <tr>
+                  <td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    Loading user records...
+                  </td>
+                </tr>
+              ) : usersList.length === 0 ? (
+                <tr>
+                  <td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    No matching users found.
+                  </td>
+                </tr>
+              ) : (
+                usersList.map((u) => {
+                  const isCurrent = u.id === user?.id;
+                  return (
+                    <tr key={u.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                      <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                        {u.email} {isCurrent && <span style={{ color: 'var(--accent-cyan)', fontSize: '0.75rem' }}>(You)</span>}
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        {u.id.slice(0, 12)}...
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem' }}>
+                        <span
+                          style={{
+                            padding: '0.2rem 0.5rem',
+                            borderRadius: 'var(--radius-sm)',
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            textTransform: 'uppercase',
+                            background:
+                              u.role === 'super_admin'
+                                ? 'rgba(0, 229, 255, 0.2)'
+                                : u.role === 'admin'
+                                ? 'rgba(2, 132, 199, 0.2)'
+                                : 'rgba(255, 255, 255, 0.08)',
+                            color:
+                              u.role === 'super_admin'
+                                ? 'var(--accent-cyan)'
+                                : u.role === 'admin'
+                                ? '#38bdf8'
+                                : 'var(--text-secondary)',
+                          }}
+                        >
+                          {u.role}
+                        </span>
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem' }}>
+                        <span
+                          style={{
+                            padding: '0.2rem 0.5rem',
+                            borderRadius: 'var(--radius-sm)',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            background: u.is_banned ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                            color: u.is_banned ? 'var(--color-bearish)' : 'var(--color-bullish)',
+                          }}
+                        >
+                          {u.is_banned ? 'Suspended' : 'Active'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                        {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>
+                        {isSuperAdmin ? (
+                          <select
+                            value={u.role}
+                            onChange={(e) => handleRoleChange(u, e.target.value)}
+                            disabled={isCurrent}
+                            style={{
+                              background: 'var(--bg-primary)',
+                              border: '1px solid var(--border-subtle)',
+                              color: 'var(--text-primary)',
+                              fontSize: '0.75rem',
+                              padding: '0.25rem 0.5rem',
+                              borderRadius: 'var(--radius-sm)',
+                              cursor: isCurrent ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            <option value="user">User</option>
+                            <option value="operator">Operator</option>
+                            <option value="admin">Admin</option>
+                            <option value="super_admin">Super Admin</option>
+                          </select>
+                        ) : (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            <Lock size={12} style={{ display: 'inline', marginRight: '4px' }} />
+                            Super Admin Required
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>
+                        {isSuperAdmin && !isCurrent ? (
+                          <button
+                            className="btn btn-secondary"
+                            onClick={() => handleToggleUserBan(u)}
+                            style={{
+                              padding: '0.25rem 0.6rem',
+                              fontSize: '0.75rem',
+                              color: u.is_banned ? 'var(--color-bullish)' : 'var(--color-bearish)',
+                            }}
+                          >
+                            {u.is_banned ? <UserCheck size={13} /> : <UserX size={13} />}
+                            <span>{u.is_banned ? 'Re-enable' : 'Suspend'}</span>
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination Bar */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '0.75rem 1rem',
+            borderTop: '1px solid var(--border-subtle)',
+            fontSize: '0.8rem',
+            color: 'var(--text-muted)',
+          }}
+        >
+          <span>
+            Showing {usersList.length} of {userTotal} users (Page {userPage})
           </span>
-          <span style={{ fontSize: '0.75rem', color: 'var(--accent-cyan)' }}>
-            {quickModel} / {deepModel}
-          </span>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              className="btn btn-secondary"
+              disabled={userPage <= 1 || isLoadingUsers}
+              onClick={() => {
+                const prev = Math.max(1, userPage - 1);
+                setUserPage(prev);
+                loadUsers(userSearch, prev);
+              }}
+              style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
+            >
+              Previous
+            </button>
+            <button
+              className="btn btn-secondary"
+              disabled={usersList.length < 20 || isLoadingUsers}
+              onClick={() => {
+                const next = userPage + 1;
+                setUserPage(next);
+                loadUsers(userSearch, next);
+              }}
+              style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
 
@@ -271,12 +636,9 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
               Credentials are encrypted on the server with Fernet (AES-128-CBC + HMAC-SHA256). Plaintext keys are never stored in databases or exposed in browser bundles.
             </p>
           </div>
-          <button className="btn btn-secondary" onClick={loadData}>
-            <RefreshCw size={14} /> Refresh Status
-          </button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.25rem', marginTop: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.25rem', marginTop: '1rem' }}>
           {providers.map((p) => {
             const isSelected = activeProvider.toLowerCase() === p.id;
             const currentTest = testResults[p.id];
@@ -297,20 +659,22 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
                   position: 'relative',
                 }}
               >
-                {/* Header */}
+                {/* Provider Header */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <span style={{ fontWeight: 700, fontSize: '1.05rem' }}>{p.name}</span>
                       {isSelected && (
-                        <span style={{
-                          padding: '0.15rem 0.5rem',
-                          background: 'rgba(0, 212, 255, 0.15)',
-                          color: 'var(--accent-cyan)',
-                          borderRadius: 'var(--radius-sm)',
-                          fontSize: '0.7rem',
-                          fontWeight: 700,
-                        }}>
+                        <span
+                          style={{
+                            padding: '0.15rem 0.5rem',
+                            background: 'rgba(0, 212, 255, 0.15)',
+                            color: 'var(--accent-cyan)',
+                            borderRadius: 'var(--radius-sm)',
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                          }}
+                        >
                           ACTIVE ENGINE
                         </span>
                       )}
@@ -319,32 +683,38 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
                       {p.description}
                     </p>
                   </div>
-                  <span style={{
-                    padding: '0.25rem 0.6rem',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '0.75rem',
-                    fontWeight: 600,
-                    background: p.configured ? 'rgba(0, 230, 118, 0.12)' : 'rgba(255, 170, 0, 0.12)',
-                    color: p.configured ? 'var(--color-bullish)' : 'var(--color-gold)',
-                  }}>
+                  <span
+                    style={{
+                      padding: '0.25rem 0.6rem',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      background: p.configured ? 'rgba(0, 230, 118, 0.12)' : 'rgba(255, 170, 0, 0.12)',
+                      color: p.configured ? 'var(--color-bullish)' : 'var(--color-neutral)',
+                    }}
+                  >
                     {p.configured
-                      ? p.source === 'encrypted_vault' ? 'Encrypted Vault' : 'Environment'
+                      ? p.source === 'encrypted_vault'
+                        ? 'Encrypted Vault'
+                        : 'Environment'
                       : 'Unconfigured'}
                   </span>
                 </div>
 
                 {/* Masked Key Display */}
                 {p.configured && (
-                  <div style={{
-                    padding: '0.6rem 0.85rem',
-                    background: 'var(--bg-primary)',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border-subtle)',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    fontSize: '0.85rem',
-                  }}>
+                  <div
+                    style={{
+                      padding: '0.6rem 0.85rem',
+                      background: 'var(--bg-primary)',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      fontSize: '0.85rem',
+                    }}
+                  >
                     <span style={{ color: 'var(--text-muted)' }}>Configured Key:</span>
                     <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--accent-cyan)' }}>
                       {p.masked_key}
@@ -365,7 +735,15 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
 
                 {/* Key Entry Form */}
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                  <label
+                    style={{
+                      display: 'block',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      color: 'var(--text-secondary)',
+                      marginBottom: '0.35rem',
+                    }}
+                  >
                     {p.configured ? 'Replace Key:' : 'Enter API Key:'}
                   </label>
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -433,17 +811,21 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
                         color: 'var(--text-primary)',
                       }}
                     >
-                      {(p.verified_quick_models && p.verified_quick_models.length > 0) && (
+                      {p.verified_quick_models && p.verified_quick_models.length > 0 && (
                         <optgroup label="✓ Verified Official Models">
                           {p.verified_quick_models.map((m) => (
-                            <option key={m} value={m}>{m} (Verified)</option>
+                            <option key={m} value={m}>
+                              {m} (Verified)
+                            </option>
                           ))}
                         </optgroup>
                       )}
-                      {(p.unverified_catalog_models && p.unverified_catalog_models.length > 0) && (
+                      {p.unverified_catalog_models && p.unverified_catalog_models.length > 0 && (
                         <optgroup label="⚠️ Unverified Upstream Catalog">
                           {p.unverified_catalog_models.map((m) => (
-                            <option key={m} value={m}>{m} (Unverified)</option>
+                            <option key={m} value={m}>
+                              {m} (Unverified)
+                            </option>
                           ))}
                         </optgroup>
                       )}
@@ -467,17 +849,21 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
                         color: 'var(--text-primary)',
                       }}
                     >
-                      {(p.verified_deep_models && p.verified_deep_models.length > 0) && (
+                      {p.verified_deep_models && p.verified_deep_models.length > 0 && (
                         <optgroup label="✓ Verified Official Models">
                           {p.verified_deep_models.map((m) => (
-                            <option key={m} value={m}>{m} (Verified)</option>
+                            <option key={m} value={m}>
+                              {m} (Verified)
+                            </option>
                           ))}
                         </optgroup>
                       )}
-                      {(p.unverified_catalog_models && p.unverified_catalog_models.length > 0) && (
+                      {p.unverified_catalog_models && p.unverified_catalog_models.length > 0 && (
                         <optgroup label="⚠️ Unverified Upstream Catalog">
                           {p.unverified_catalog_models.map((m) => (
-                            <option key={m} value={m}>{m} (Unverified)</option>
+                            <option key={m} value={m}>
+                              {m} (Unverified)
+                            </option>
                           ))}
                         </optgroup>
                       )}
@@ -494,13 +880,19 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
                     style={{ flex: 1, padding: '0.5rem', fontSize: '0.8rem' }}
                   >
                     <Zap size={14} color="var(--accent-cyan)" />
-                    {isTesting ? 'Testing Connection...' : 'Test Connection'}
+                    {isTesting ? 'Testing...' : 'Test Connection'}
                   </button>
 
                   <button
                     className={`btn ${isSelected ? 'btn-secondary' : 'btn-primary'}`}
                     disabled={isSelected}
-                    onClick={() => handleSetActiveProvider(p.id, selectedQuick[p.id] || p.current_quick_model, selectedDeep[p.id] || p.current_deep_model)}
+                    onClick={() =>
+                      handleSetActiveProvider(
+                        p.id,
+                        selectedQuick[p.id] || p.current_quick_model,
+                        selectedDeep[p.id] || p.current_deep_model
+                      )
+                    }
                     style={{ flex: 1, padding: '0.5rem', fontSize: '0.8rem' }}
                   >
                     <Cpu size={14} />
@@ -510,17 +902,19 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
 
                 {/* Test Connection Output */}
                 {currentTest && (
-                  <div style={{
-                    padding: '0.5rem 0.75rem',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '0.78rem',
-                    background: currentTest.success ? 'rgba(0, 230, 118, 0.1)' : 'rgba(255, 68, 68, 0.1)',
-                    border: `1px solid ${currentTest.success ? 'var(--color-bullish)' : 'var(--color-bearish)'}`,
-                    color: currentTest.success ? 'var(--color-bullish)' : 'var(--color-bearish)',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                  }}>
+                  <div
+                    style={{
+                      padding: '0.5rem 0.75rem',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: '0.78rem',
+                      background: currentTest.success ? 'rgba(0, 230, 118, 0.1)' : 'rgba(255, 68, 68, 0.1)',
+                      border: `1px solid ${currentTest.success ? 'var(--color-bullish)' : 'var(--color-bearish)'}`,
+                      color: currentTest.success ? 'var(--color-bullish)' : 'var(--color-bearish)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
                     <span>{currentTest.message}</span>
                     {currentTest.latency_ms !== undefined && (
                       <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
@@ -566,14 +960,16 @@ export const Admin: React.FC<AdminProps> = ({ health }) => {
                   <td style={{ padding: '0.75rem 1rem', fontFamily: 'var(--font-mono)' }}>{log.actor}</td>
                   <td style={{ padding: '0.75rem 1rem', color: 'var(--text-secondary)' }}>{log.timestamp}</td>
                   <td style={{ padding: '0.75rem 1rem' }}>
-                    <span style={{
-                      padding: '0.2rem 0.5rem',
-                      borderRadius: 'var(--radius-sm)',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      background: log.status.includes('BLOCKED') ? 'rgba(255, 68, 68, 0.15)' : 'rgba(0, 230, 118, 0.15)',
-                      color: log.status.includes('BLOCKED') ? 'var(--color-bearish)' : 'var(--color-bullish)',
-                    }}>
+                    <span
+                      style={{
+                        padding: '0.2rem 0.5rem',
+                        borderRadius: 'var(--radius-sm)',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        background: log.status.includes('BLOCKED') ? 'rgba(255, 68, 68, 0.15)' : 'rgba(0, 230, 118, 0.15)',
+                        color: log.status.includes('BLOCKED') ? 'var(--color-bearish)' : 'var(--color-bullish)',
+                      }}
+                    >
                       {log.status}
                     </span>
                   </td>

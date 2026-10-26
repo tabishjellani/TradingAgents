@@ -11,10 +11,11 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from backend.app.auth import UserClaims, require_admin
+from backend.app.auth import UserClaims, require_admin, require_super_admin
 from backend.app.config import settings
 from backend.app.core.secrets_vault import SUPPORTED_PROVIDERS, vault
 from backend.app.db.repository import db_repo
+from backend.app.services.market_data import market_service
 
 router = APIRouter(prefix="/api/v1/admin", tags=["Administration"])
 
@@ -450,3 +451,223 @@ async def test_ai_provider_connection(
         "message": f"Unknown provider '{p_lower}'.",
         "latency_ms": None,
     }
+
+
+# -----------------------------------------------------------------------------
+# User Management & Super Admin Endpoints
+# -----------------------------------------------------------------------------
+
+
+class UpdateUserRoleRequest(BaseModel):
+    role: str = Field(pattern="^(user|operator|admin|super_admin)$")
+
+
+class UpdateUserStatusRequest(BaseModel):
+    is_banned: bool
+
+
+class AdminUserInfo(BaseModel):
+    id: str
+    email: str
+    role: str
+    created_at: str
+    last_sign_in_at: str | None = None
+    is_banned: bool = False
+    confirmed_at: str | None = None
+
+
+class AdminUserListResponse(BaseModel):
+    users: list[AdminUserInfo]
+    total: int
+    page: int
+    per_page: int
+
+
+@router.get("/users", response_model=AdminUserListResponse)
+async def list_admin_users(
+    admin: Annotated[UserClaims, Depends(require_admin)],
+    search: str = "",
+    page: int = 1,
+    per_page: int = 25,
+) -> AdminUserListResponse:
+    """List registered users with pagination and search. Requires admin or super_admin."""
+    # When Supabase is configured with service_role_key, query Supabase Auth Admin API
+    if settings.supabase_url and settings.supabase_service_role_key:
+        headers = {
+            "apikey": settings.supabase_service_role_key,
+            "Authorization": f"Bearer {settings.supabase_service_role_key}",
+        }
+        url = f"{settings.supabase_url.rstrip('/')}/auth/v1/admin/users"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(url, headers=headers, params={"page": page, "per_page": per_page})
+                if res.status_code == 200:
+                    raw_users = res.json().get("users", [])
+                    user_items: list[AdminUserInfo] = []
+                    for u in raw_users:
+                        email = u.get("email", "")
+                        if search and search.lower() not in email.lower() and search not in u.get("id", ""):
+                            continue
+                        app_meta = u.get("app_metadata", {})
+                        user_items.append(
+                            AdminUserInfo(
+                                id=u.get("id"),
+                                email=email,
+                                role=app_meta.get("role", "user"),
+                                created_at=u.get("created_at", ""),
+                                last_sign_in_at=u.get("last_sign_in_at"),
+                                is_banned=bool(u.get("banned_until")),
+                                confirmed_at=u.get("confirmed_at"),
+                            )
+                        )
+                    return AdminUserListResponse(
+                        users=user_items,
+                        total=len(user_items),
+                        page=page,
+                        per_page=per_page,
+                    )
+        except Exception as exc:
+            logger.warning("Could not list remote Supabase users: %s", exc)
+
+    # Offline / development fallback from local database store
+    users_data: list[AdminUserInfo] = [
+        AdminUserInfo(
+            id=admin.id,
+            email=admin.email,
+            role=admin.role,
+            created_at=datetime.now(UTC).isoformat(),
+            last_sign_in_at=datetime.now(UTC).isoformat(),
+            is_banned=False,
+            confirmed_at=datetime.now(UTC).isoformat(),
+        ),
+    ]
+    if search:
+        users_data = [u for u in users_data if search.lower() in u.email.lower() or search in u.id]
+
+    return AdminUserListResponse(
+        users=users_data,
+        total=len(users_data),
+        page=page,
+        per_page=per_page,
+    )
+
+
+@router.post("/users/{user_id}/role")
+async def update_user_role(
+    user_id: str,
+    req: UpdateUserRoleRequest,
+    super_admin: Annotated[UserClaims, Depends(require_super_admin)],
+) -> dict[str, Any]:
+    """Assign or modify a user's role. Restricted strictly to Super Administrators."""
+    target_role = req.role
+
+    # Prevent accidental self-demotion from super_admin to lock out the system
+    if user_id == super_admin.id and target_role != "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super administrators cannot demote their own account to prevent lockout.",
+        )
+
+    # Update in Supabase Auth if configured
+    if settings.supabase_url and settings.supabase_service_role_key:
+        headers = {
+            "apikey": settings.supabase_service_role_key,
+            "Authorization": f"Bearer {settings.supabase_service_role_key}",
+            "Content-Type": "application/json",
+        }
+        url = f"{settings.supabase_url.rstrip('/')}/auth/v1/admin/users/{user_id}"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # 1. Fetch current app_metadata
+            get_res = await client.get(url, headers=headers)
+            if get_res.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Target user '{user_id}' not found.",
+                )
+            user_data = get_res.json()
+            app_meta = user_data.get("app_metadata", {})
+            updated_meta = {**app_meta, "role": target_role}
+
+            # 2. Update app_metadata
+            put_res = await client.put(url, headers=headers, json={"app_metadata": updated_meta})
+            if put_res.status_code not in (200, 204):
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to update role in Supabase Auth.",
+                )
+
+            # 3. Update public.profiles row
+            profile_url = f"{settings.supabase_url.rstrip('/')}/rest/v1/profiles?id=eq.{user_id}"
+            await client.patch(profile_url, headers=headers, json={"role": target_role})
+
+    # Record audit event
+    await db_repo.record_audit_event(
+        actor_id=super_admin.id,
+        action="user_role_changed",
+        resource_type="auth_user",
+        resource_id=user_id,
+        details={"new_role": target_role, "changed_by": super_admin.email},
+    )
+
+    return {
+        "success": True,
+        "user_id": user_id,
+        "new_role": target_role,
+        "updated_by": super_admin.email,
+        "message": f"Successfully updated user role to '{target_role}'.",
+    }
+
+
+@router.post("/users/{user_id}/status")
+async def update_user_status(
+    user_id: str,
+    req: UpdateUserStatusRequest,
+    super_admin: Annotated[UserClaims, Depends(require_super_admin)],
+) -> dict[str, Any]:
+    """Disable or suspend an account. Restricted strictly to Super Administrators."""
+    if user_id == super_admin.id and req.is_banned:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super administrators cannot suspend their own account.",
+        )
+
+    if settings.supabase_url and settings.supabase_service_role_key:
+        headers = {
+            "apikey": settings.supabase_service_role_key,
+            "Authorization": f"Bearer {settings.supabase_service_role_key}",
+            "Content-Type": "application/json",
+        }
+        url = f"{settings.supabase_url.rstrip('/')}/auth/v1/admin/users/{user_id}"
+        # Setting ban_duration to "876000h" (~100 years) or "none"
+        ban_duration = "876000h" if req.is_banned else "none"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.put(url, headers=headers, json={"ban_duration": ban_duration})
+            if res.status_code not in (200, 204):
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to update user ban status in Supabase.",
+                )
+
+    await db_repo.record_audit_event(
+        actor_id=super_admin.id,
+        action="user_status_changed",
+        resource_type="auth_user",
+        resource_id=user_id,
+        details={"is_banned": req.is_banned, "changed_by": super_admin.email},
+    )
+
+    return {
+        "success": True,
+        "user_id": user_id,
+        "is_banned": req.is_banned,
+        "message": "User account suspended." if req.is_banned else "User account re-enabled.",
+    }
+
+
+@router.get("/market-status")
+async def get_admin_market_status(
+    _admin: Annotated[UserClaims, Depends(require_admin)],
+) -> dict[str, Any]:
+    """Retrieve detailed market data diagnostics for the administration console."""
+    status_obj = market_service.get_provider_status()
+    return status_obj.model_dump()

@@ -23,6 +23,7 @@ function AppContent() {
   const [selectedAssetType, setSelectedAssetType] = useState<AssetType>('stock');
   const [canInstall, setCanInstall] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const [health, setHealth] = useState<SystemHealth>({
     status: 'connecting',
@@ -50,6 +51,29 @@ function AppContent() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
     };
   }, []);
+
+  // Keyboard navigation: Close mobile drawer on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isMobileMenuOpen) {
+        setIsMobileMenuOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isMobileMenuOpen]);
+
+  // Lock background scroll when mobile drawer is open
+  useEffect(() => {
+    if (isMobileMenuOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isMobileMenuOpen]);
 
   // Poll system health and quotes ONLY when authenticated
   useEffect(() => {
@@ -90,6 +114,7 @@ function AppContent() {
     setSelectedTicker(symbol);
     setSelectedAssetType(assetType);
     setCurrentTab('research');
+    setIsMobileMenuOpen(false);
   };
 
   // 1. Loading state during initial session restoration (prevents flashing private content)
@@ -107,22 +132,26 @@ function AppContent() {
     return <Login />;
   }
 
-  // 4. Authenticated state: verify tab permissions
-  const effectiveTab = currentTab === 'admin' && user.role !== 'admin' ? 'dashboard' : currentTab;
+  // 4. Authenticated state: verify tab permissions (admin or super_admin)
+  const isAdminOrSuper = user.role === 'admin' || user.role === 'super_admin';
+  const effectiveTab = currentTab === 'admin' && !isAdminOrSuper ? 'dashboard' : currentTab;
 
   return (
     <div className="app-container">
-      {/* Sidebar Navigation */}
+      {/* Responsive Sidebar & Mobile Drawer */}
       <Sidebar
         currentTab={effectiveTab}
         onSelectTab={(tab) => {
-          if (tab === 'admin' && user.role !== 'admin') {
+          if (tab === 'admin' && !isAdminOrSuper) {
             return;
           }
           setCurrentTab(tab);
+          setIsMobileMenuOpen(false);
         }}
         health={health}
         userRole={user.role}
+        isOpenMobile={isMobileMenuOpen}
+        onCloseMobile={() => setIsMobileMenuOpen(false)}
       />
 
       {/* Main Workspace Area */}
@@ -133,6 +162,7 @@ function AppContent() {
           onSearchChange={setSearchQuery}
           canInstall={canInstall}
           onInstallClick={handleInstallClick}
+          onToggleMobileMenu={() => setIsMobileMenuOpen((prev) => !prev)}
         />
 
         {/* Protected Tab Router */}
@@ -156,7 +186,7 @@ function AppContent() {
 
         {effectiveTab === 'alerts' && <Alerts />}
 
-        {effectiveTab === 'admin' && user.role === 'admin' && <Admin health={health} />}
+        {effectiveTab === 'admin' && isAdminOrSuper && <Admin health={health} />}
       </div>
     </div>
   );

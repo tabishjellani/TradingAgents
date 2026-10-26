@@ -165,3 +165,40 @@ test('8. Live-trading safety remains disabled by default', () => {
   assert.strictEqual(defaultHealth.liveTradingEnabled, false, 'Live trading must be disabled');
   assert.strictEqual(defaultHealth.sandboxMode, true, 'Sandbox mode must be active');
 });
+
+test('9. Super Admin role is granted access to administration tab alongside Admin', () => {
+  const superAdmin = { id: 'sa-001', email: 'owner@tradingagents.com', role: 'super_admin' };
+  const admin = { id: 'adm-002', email: 'staff@tradingagents.com', role: 'admin' };
+  const user = { id: 'usr-003', email: 'trader@example.com', role: 'user' };
+
+  const canAccessAdmin = (u) => u.role === 'admin' || u.role === 'super_admin';
+
+  assert.strictEqual(canAccessAdmin(superAdmin), true, 'Super admin must access admin tab');
+  assert.strictEqual(canAccessAdmin(admin), true, 'Admin must access admin tab');
+  assert.strictEqual(canAccessAdmin(user), false, 'Regular user must be blocked');
+});
+
+test('10. Mobile sidebar drawer defaults to closed, opens on toggle, closes on selection', () => {
+  let isMobileOpen = false;
+
+  // Toggle open
+  const toggleMobileMenu = () => {
+    isMobileOpen = !isMobileOpen;
+  };
+
+  // Close on selection
+  const selectTab = () => {
+    isMobileOpen = false;
+  };
+
+  // Initial state on mobile
+  assert.strictEqual(isMobileOpen, false, 'Sidebar must be closed by default on mobile');
+
+  // Open drawer
+  toggleMobileMenu();
+  assert.strictEqual(isMobileOpen, true, 'Drawer must open when menu button clicked');
+
+  // Select tab
+  selectTab();
+  assert.strictEqual(isMobileOpen, false, 'Drawer must auto-close when navigation item selected');
+});

@@ -210,7 +210,7 @@ def decode_token(token: str) -> UserClaims:
     # Check user role strictly from app_metadata (never from user_metadata)
     app_meta = payload.get("app_metadata", {})
     assigned_role = app_meta.get("role", "user")
-    role = assigned_role if assigned_role in ("user", "operator", "admin") else "user"
+    role = assigned_role if assigned_role in ("user", "operator", "admin", "super_admin") else "user"
 
     if not user_id:
         raise HTTPException(
@@ -238,8 +238,8 @@ async def get_current_user(
 async def require_admin(
     current_user: Annotated[UserClaims, Depends(get_current_user)],
 ) -> UserClaims:
-    """FastAPI dependency: Enforces admin role requirement."""
-    if current_user.role != "admin":
+    """FastAPI dependency: Enforces admin or super_admin role requirement."""
+    if current_user.role not in ("admin", "super_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrative privileges required for this action.",
@@ -247,11 +247,23 @@ async def require_admin(
     return current_user
 
 
+async def require_super_admin(
+    current_user: Annotated[UserClaims, Depends(get_current_user)],
+) -> UserClaims:
+    """FastAPI dependency: Enforces super_admin role requirement."""
+    if current_user.role != "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Super Administrator privileges required for this action.",
+        )
+    return current_user
+
+
 async def require_operator_or_admin(
     current_user: Annotated[UserClaims, Depends(get_current_user)],
 ) -> UserClaims:
-    """FastAPI dependency: Enforces operator or admin role requirement."""
-    if current_user.role not in ("operator", "admin"):
+    """FastAPI dependency: Enforces operator, admin, or super_admin role requirement."""
+    if current_user.role not in ("operator", "admin", "super_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Elevated privileges (operator or admin) required.",

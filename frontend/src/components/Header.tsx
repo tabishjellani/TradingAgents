@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Wifi, Shield, Download, User, LogOut } from 'lucide-react';
+import { Search, Wifi, Shield, Download, User, LogOut, Menu } from 'lucide-react';
 import type { SystemHealth } from '../types';
 import { useAuth } from '../context/AuthContext';
 
@@ -9,6 +9,7 @@ interface HeaderProps {
   onSearchChange: (q: string) => void;
   onInstallClick?: () => void;
   canInstall?: boolean;
+  onToggleMobileMenu?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -17,6 +18,7 @@ export const Header: React.FC<HeaderProps> = ({
   onSearchChange,
   onInstallClick,
   canInstall,
+  onToggleMobileMenu,
 }) => {
   const isOnline = health.status === 'healthy';
   const { user, signOut } = useAuth();
@@ -28,6 +30,16 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header className="top-header">
       <div className="header-left">
+        {onToggleMobileMenu && (
+          <button
+            className="mobile-menu-btn"
+            onClick={onToggleMobileMenu}
+            aria-label="Toggle navigation menu"
+            title="Open navigation menu"
+          >
+            <Menu size={20} />
+          </button>
+        )}
         <div className="search-bar">
           <Search size={16} color="var(--text-muted)" />
           <input

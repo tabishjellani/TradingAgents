@@ -6,6 +6,7 @@ from backend.app.auth.jwt import (
     get_current_user,
     require_admin,
     require_operator_or_admin,
+    require_super_admin,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "get_current_user",
     "require_admin",
     "require_operator_or_admin",
+    "require_super_admin",
 ]

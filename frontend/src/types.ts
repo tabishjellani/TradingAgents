@@ -15,6 +15,29 @@ export interface MarketQuote {
   source: string;
   timestamp: string;
   isDelayed: boolean;
+  feedStatus?: 'live' | 'cached' | 'delayed' | 'unavailable';
+}
+
+export interface MarketProviderStatus {
+  provider: string;
+  status: 'healthy' | 'degraded' | 'down';
+  supported_assets: string[];
+  is_free_tier: boolean;
+  delayed_by_minutes: number;
+  last_successful_update: string | null;
+  consecutive_failures: number;
+  last_error: string | null;
+  cache_entries: number;
+  cache_hits: number;
+  total_requests: number;
+}
+
+export interface SymbolSearchResult {
+  symbol: string;
+  canonical_symbol: string;
+  name: string;
+  asset_type: AssetType;
+  exchange: string;
 }
 
 export interface ResearchJob {

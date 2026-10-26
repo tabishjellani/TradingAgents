@@ -1,4 +1,13 @@
-import type { MarketQuote, ResearchJob, SystemHealth, PaperPosition, PaperOrder, AlertRule } from '../types';
+import type {
+  MarketQuote,
+  MarketProviderStatus,
+  SymbolSearchResult,
+  ResearchJob,
+  SystemHealth,
+  PaperPosition,
+  PaperOrder,
+  AlertRule,
+} from '../types';
 
 const envBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim().replace(/\/+$/, '');
 const API_BASE = envBase ? (envBase.endsWith('/api/v1') ? envBase : `${envBase}/api/v1`) : '/api/v1';
@@ -109,6 +118,7 @@ export async function fetchMarketQuotes(symbols: string = 'SPY,QQQ,NVDA,AAPL,BTC
         source: q.source || 'Yahoo Finance',
         timestamp: q.timestamp,
         isDelayed: Boolean(q.isDelayed ?? q.is_delayed),
+        feedStatus: q.feedStatus || q.feed_status || (q.isDelayed ? 'delayed' : 'live'),
       }));
     }
   } catch {
@@ -116,6 +126,26 @@ export async function fetchMarketQuotes(symbols: string = 'SPY,QQQ,NVDA,AAPL,BTC
   }
 
   return [];
+}
+
+export async function fetchMarketStatus(): Promise<MarketProviderStatus | null> {
+  try {
+    const res = await apiFetch('/market/status');
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function searchMarketSymbols(query: string): Promise<SymbolSearchResult[]> {
+  try {
+    const res = await apiFetch(`/market/search?query=${encodeURIComponent(query)}`);
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
 }
 
 export async function submitResearchJob(params: {
@@ -403,6 +433,59 @@ export async function testAiProviderConnection(provider: string, apiKey?: string
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `Test connection failed (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+export interface AdminUserInfo {
+  id: string;
+  email: string;
+  role: string;
+  created_at: string;
+  last_sign_in_at?: string;
+  is_banned: boolean;
+  confirmed_at?: string;
+}
+
+export interface AdminUsersResponse {
+  users: AdminUserInfo[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export async function fetchAdminUsers(search: string = '', page: number = 1): Promise<AdminUsersResponse> {
+  const query = new URLSearchParams();
+  if (search) query.set('search', search);
+  query.set('page', String(page));
+  const res = await apiFetch(`/admin/users?${query.toString()}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to fetch users (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+export async function updateAdminUserRole(userId: string, role: string): Promise<any> {
+  const res = await apiFetch(`/admin/users/${userId}/role`, {
+    method: 'POST',
+    body: JSON.stringify({ role }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to update user role (HTTP ${res.status})`);
+  }
+  return await res.json();
+}
+
+export async function updateAdminUserStatus(userId: string, isBanned: boolean): Promise<any> {
+  const res = await apiFetch(`/admin/users/${userId}/status`, {
+    method: 'POST',
+    body: JSON.stringify({ is_banned: isBanned }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to update user status (HTTP ${res.status})`);
   }
   return await res.json();
 }

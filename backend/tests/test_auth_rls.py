@@ -546,3 +546,64 @@ async def test_job_manager_restart_recovery():
     assert recovered["status"] == "failed"
     assert "Process restarted" in recovered["error_message"]
 
+
+@pytest.mark.asyncio
+async def test_super_admin_role_enforcement():
+    """Verify tiered RBAC: admin can view users, only super_admin can modify roles and bans."""
+    user_token = create_token("usr-reg", "user@example.com", role="user")
+    admin_token = create_token("adm-staff", "staff@example.com", role="admin")
+    super_admin_token = create_token("sa-owner", "owner@example.com", role="super_admin")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. User listing: user denied (403), admin allowed (200), super_admin allowed (200)
+        res_u = await client.get("/api/v1/admin/users", headers={"Authorization": f"Bearer {user_token}"})
+        assert res_u.status_code == 403
+
+        res_a = await client.get("/api/v1/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
+        assert res_a.status_code == 200
+        assert "users" in res_a.json()
+
+        res_sa = await client.get("/api/v1/admin/users", headers={"Authorization": f"Bearer {super_admin_token}"})
+        assert res_sa.status_code == 200
+
+        # 2. Role promotion: admin denied (403), super_admin allowed (200)
+        res_promo_admin = await client.post(
+            "/api/v1/admin/users/usr-target/role",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"role": "admin"},
+        )
+        assert res_promo_admin.status_code == 403
+        assert "Super Administrator" in res_promo_admin.json()["detail"]
+
+        res_promo_sa = await client.post(
+            "/api/v1/admin/users/usr-target/role",
+            headers={"Authorization": f"Bearer {super_admin_token}"},
+            json={"role": "admin"},
+        )
+        assert res_promo_sa.status_code == 200
+        assert res_promo_sa.json()["new_role"] == "admin"
+
+        # 3. Super admin self-demotion is rejected to prevent lockout
+        res_self_demote = await client.post(
+            "/api/v1/admin/users/sa-owner/role",
+            headers={"Authorization": f"Bearer {super_admin_token}"},
+            json={"role": "user"},
+        )
+        assert res_self_demote.status_code == 400
+        assert "cannot demote their own account" in res_self_demote.json()["detail"]
+
+        # 4. Super admin self-ban is rejected
+        res_self_ban = await client.post(
+            "/api/v1/admin/users/sa-owner/status",
+            headers={"Authorization": f"Bearer {super_admin_token}"},
+            json={"is_banned": True},
+        )
+        assert res_self_ban.status_code == 400
+        assert "cannot suspend their own account" in res_self_ban.json()["detail"]
+
+        # 5. Market status diagnostic endpoint accessible to admin
+        res_diag = await client.get("/api/v1/admin/market-status", headers={"Authorization": f"Bearer {admin_token}"})
+        assert res_diag.status_code == 200
+        assert res_diag.json()["provider"]
+
