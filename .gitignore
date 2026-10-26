@@ -233,3 +233,11 @@ data/
 *.vault_key
 secrets.enc
 *.enc
+
+# TradingAgents generated files
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+supabase/.temp/
