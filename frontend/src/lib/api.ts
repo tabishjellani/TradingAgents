@@ -3,25 +3,45 @@ import type { MarketQuote, ResearchJob, SystemHealth, PaperPosition, PaperOrder,
 const envBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim().replace(/\/+$/, '');
 const API_BASE = envBase ? (envBase.endsWith('/api/v1') ? envBase : `${envBase}/api/v1`) : '/api/v1';
 
-// Token storage: checks localStorage first, defaults to offline dev admin token if unauthenticated
+// Secure token storage: strictly managed by Supabase session lifecycle
 const STORAGE_KEY = 'tradingagents_auth_token';
 
-let inMemoryToken: string | null = localStorage.getItem(STORAGE_KEY);
-if (!inMemoryToken && !import.meta.env.PROD) {
-  // Local offline development convenience only; impossible in production builds
-  inMemoryToken = 'test-token:dev-user-01:dev@tradingagents.local:admin';
+let inMemoryToken: string | null = null;
+try {
+  const stored = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null;
+  if (stored) {
+    if (import.meta.env.PROD && stored.startsWith('test-token:')) {
+      localStorage.removeItem(STORAGE_KEY);
+      inMemoryToken = null;
+    } else {
+      inMemoryToken = stored;
+    }
+  }
+} catch {
+  inMemoryToken = null;
 }
 
 export function getAuthToken(): string | null {
+  if (inMemoryToken && import.meta.env.PROD && inMemoryToken.startsWith('test-token:')) {
+    setAuthToken(null);
+    return null;
+  }
   return inMemoryToken;
 }
 
 export function setAuthToken(token: string | null) {
+  if (token && import.meta.env.PROD && token.startsWith('test-token:')) {
+    token = null;
+  }
   inMemoryToken = token;
-  if (token) {
-    localStorage.setItem(STORAGE_KEY, token);
-  } else {
-    localStorage.removeItem(STORAGE_KEY);
+  try {
+    if (token) {
+      localStorage.setItem(STORAGE_KEY, token);
+    } else {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  } catch {
+    // Gracefully handle storage exceptions
   }
 }
 

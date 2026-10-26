@@ -6,6 +6,7 @@ import {
   History,
   Bell,
   ShieldCheck,
+  Lock,
   Zap,
 } from 'lucide-react';
 import type { SystemHealth } from '../types';
@@ -16,17 +17,28 @@ interface SidebarProps {
   currentTab: TabId;
   onSelectTab: (tab: TabId) => void;
   health: SystemHealth;
+  userRole?: string;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, health }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, health, userRole }) => {
+  const isAdmin = userRole === 'admin';
+
   const navItems = [
-    { id: 'dashboard', label: 'Market Dashboard', icon: LayoutDashboard },
-    { id: 'research', label: 'Research Workspace', icon: Cpu },
-    { id: 'portfolio', label: 'Paper Portfolio', icon: Briefcase },
-    { id: 'backtest', label: 'Backtesting Lab', icon: History },
-    { id: 'alerts', label: 'Alerts Center', icon: Bell },
-    { id: 'admin', label: 'Administration', icon: ShieldCheck },
-  ] as const;
+    { id: 'dashboard' as TabId, label: 'Market Dashboard', icon: LayoutDashboard, adminOnly: false },
+    { id: 'research' as TabId, label: 'Research Workspace', icon: Cpu, adminOnly: false },
+    { id: 'portfolio' as TabId, label: 'Paper Portfolio', icon: Briefcase, adminOnly: false },
+    { id: 'backtest' as TabId, label: 'Backtesting Lab', icon: History, adminOnly: false },
+    { id: 'alerts' as TabId, label: 'Alerts Center', icon: Bell, adminOnly: false },
+    { id: 'admin' as TabId, label: 'Administration', icon: ShieldCheck, adminOnly: true },
+  ];
+
+  const handleTabClick = (item: (typeof navItems)[number]) => {
+    if (item.adminOnly && !isAdmin) {
+      // Non-admins cannot open admin tab
+      return;
+    }
+    onSelectTab(item.id);
+  };
 
   return (
     <aside className="sidebar">
@@ -45,18 +57,31 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, healt
       </div>
 
       {/* Navigation List */}
-      <nav className="nav-menu">
+      <nav className="nav-menu" aria-label="Main Navigation">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = currentTab === item.id;
+          const isLocked = item.adminOnly && !isAdmin;
+
           return (
             <div
               key={item.id}
               className={`nav-item ${isActive ? 'active' : ''}`}
-              onClick={() => onSelectTab(item.id)}
+              onClick={() => handleTabClick(item)}
+              style={{
+                opacity: isLocked ? 0.45 : 1,
+                cursor: isLocked ? 'not-allowed' : 'pointer',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+              title={isLocked ? 'Administrator privileges required' : item.label}
             >
-              <Icon size={18} />
-              <span>{item.label}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <Icon size={18} />
+                <span>{item.label}</span>
+              </div>
+              {isLocked && <Lock size={12} color="var(--text-muted)" />}
             </div>
           );
         })}

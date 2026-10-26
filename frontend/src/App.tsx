@@ -8,10 +8,15 @@ import { Portfolio } from './pages/Portfolio';
 import { Backtest } from './pages/Backtest';
 import { Alerts } from './pages/Alerts';
 import { Admin } from './pages/Admin';
+import { Login } from './pages/Login';
+import { LoadingScreen } from './components/LoadingScreen';
+import { ConfigError } from './components/ConfigError';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import type { SystemHealth, MarketQuote, AssetType } from './types';
 import { fetchSystemHealth, fetchMarketQuotes } from './lib/api';
 
-export function App() {
+function AppContent() {
+  const { user, loading, isConfigured } = useAuth();
   const [currentTab, setCurrentTab] = useState<TabId>('dashboard');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTicker, setSelectedTicker] = useState('NVDA');
@@ -32,19 +37,8 @@ export function App() {
 
   const [quotes, setQuotes] = useState<MarketQuote[]>([]);
 
+  // PWA install handler (independent of authentication)
   useEffect(() => {
-    // Poll system health and quotes
-    const loadData = async () => {
-      const h = await fetchSystemHealth();
-      setHealth(h);
-      const q = await fetchMarketQuotes();
-      setQuotes(q);
-    };
-
-    loadData();
-    const interval = setInterval(loadData, 15000);
-
-    // Listen for PWA install event
     const handleBeforeInstall = (e: any) => {
       e.preventDefault();
       setDeferredPrompt(e);
@@ -52,12 +46,35 @@ export function App() {
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstall);
-
     return () => {
-      clearInterval(interval);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
     };
   }, []);
+
+  // Poll system health and quotes ONLY when authenticated
+  useEffect(() => {
+    if (!user) return;
+
+    let isMounted = true;
+    const loadData = async () => {
+      try {
+        const h = await fetchSystemHealth();
+        if (isMounted) setHealth(h);
+        const q = await fetchMarketQuotes();
+        if (isMounted) setQuotes(q);
+      } catch {
+        // Handled within api fetchers
+      }
+    };
+
+    loadData();
+    const interval = setInterval(loadData, 15000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [user]);
 
   const handleInstallClick = async () => {
     if (!deferredPrompt) return;
@@ -75,13 +92,37 @@ export function App() {
     setCurrentTab('research');
   };
 
+  // 1. Loading state during initial session restoration (prevents flashing private content)
+  if (loading) {
+    return <LoadingScreen />;
+  }
+
+  // 2. Fail-closed error if Supabase credentials are missing in production
+  if (!isConfigured && import.meta.env.PROD) {
+    return <ConfigError />;
+  }
+
+  // 3. Unauthenticated state: display full-page Login / Register screen
+  if (!user) {
+    return <Login />;
+  }
+
+  // 4. Authenticated state: verify tab permissions
+  const effectiveTab = currentTab === 'admin' && user.role !== 'admin' ? 'dashboard' : currentTab;
+
   return (
     <div className="app-container">
       {/* Sidebar Navigation */}
       <Sidebar
-        currentTab={currentTab}
-        onSelectTab={(tab) => setCurrentTab(tab)}
+        currentTab={effectiveTab}
+        onSelectTab={(tab) => {
+          if (tab === 'admin' && user.role !== 'admin') {
+            return;
+          }
+          setCurrentTab(tab);
+        }}
         health={health}
+        userRole={user.role}
       />
 
       {/* Main Workspace Area */}
@@ -94,30 +135,38 @@ export function App() {
           onInstallClick={handleInstallClick}
         />
 
-        {/* Tab Router */}
-        {currentTab === 'dashboard' && (
+        {/* Protected Tab Router */}
+        {effectiveTab === 'dashboard' && (
           <Dashboard
             quotes={quotes}
             onSelectTickerForResearch={handleSelectTickerForResearch}
           />
         )}
 
-        {currentTab === 'research' && (
+        {effectiveTab === 'research' && (
           <Research
             initialSymbol={selectedTicker}
             initialAssetType={selectedAssetType}
           />
         )}
 
-        {currentTab === 'portfolio' && <Portfolio />}
+        {effectiveTab === 'portfolio' && <Portfolio />}
 
-        {currentTab === 'backtest' && <Backtest />}
+        {effectiveTab === 'backtest' && <Backtest />}
 
-        {currentTab === 'alerts' && <Alerts />}
+        {effectiveTab === 'alerts' && <Alerts />}
 
-        {currentTab === 'admin' && <Admin health={health} />}
+        {effectiveTab === 'admin' && user.role === 'admin' && <Admin health={health} />}
       </div>
     </div>
+  );
+}
+
+export function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
 
